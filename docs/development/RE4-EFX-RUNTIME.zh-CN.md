@@ -930,18 +930,18 @@ UVSequenceModifier（逐粒子，替换宿主 UVSequence 的 T；调用紧跟 UV
 
 | 序 | C# 名 | 运行时 | 状态 | 依据 |
 |---|---|---|---|---|
-| 0 | `Flags`（Billboard3D、Polygon、Billboard2D）/ `BlendFlags`（条带与 GPU 类） | 低 4 位 = 混合方式，写入渲染键 `dst+0x44` 位 11-14（= Polygon3DConstant 的 cbEffect3DFlags）；位 4（0x10）= 出生颜色在 Color 与 ColorRange 之间随机；位 5（0x20）= 常量 `+0x110 = 1.0`，含义未知 | 位 4 已确认；低 4 位 = BlendType 部分待确认 | TA 3e0ebe5, 3d18835；RW（PS 按此分支） |
+| 0 | `Flags`（Billboard3D、Polygon、Billboard2D）/ `BlendFlags`（条带与 GPU 类） | 低 4 位 = BlendType，写入渲染键 `dst+0x44` 位 11-14（= Polygon3DConstant 的 cbEffect3DFlags），像素着色器按 `(cbEffect3DFlags >> 11) & 15` 分五支（§7.2）；位 4（0x10）= 出生颜色在 Color 与 ColorRange 之间随机；位 5（0x20）= 常量 `+0x110`（cbUsePhysicalAlphaBlend3D）= 1.0：Physical 时写出 alpha | 已确认 | TA 3e0ebe5, 3d18835；primitivevfx PS |
 | 1 | `Color` | 粒子出生颜色 | 已确认 | TA 3cfcf50 |
 | 2 | `ColorRange` | 随机颜色的另一端；EdgeBlend 时引擎名 EdgeOuterColor；另以 float4/255 上传到 +0xf0 | 已确认 | TA |
-| 3 | `ColorRate` | 上传 +0x10c。按混合方式另名 ContrastRate / InnerIntensity / MultiplyColorRate / EmissionRate | 上传已确认，着色器用法未读 | TA, EXP |
-| 4 | `Intensity` | 无条件上传 +0xec。另名 BackIntensity / OuterIntensity / MultiplyBlackRate（引擎没有 "Intensity" 这个名字） | 上传已确认，着色器用法未读 | TA |
-| 5 | `EdgeBlendRange` | 上传 +0x108 | 上传已确认 | TA, RT |
-| 6 | `AlphaRate` | 上传 +0xe4（GpuParticleVS 的 alphaRate 在 148） | 上传已确认 | TA, SHE |
+| 3 | `ColorRate` | 上传 +0x10c = cbEmissiveRate：五种 BlendType 都乘进 RGB；Physical 另乘进发光增益 `37.5·ColorRate·lum(T)²`。按混合方式另名 ContrastRate / InnerIntensity / MultiplyColorRate / EmissionRate | 已确认 | TA, EXP；primitivevfx PS |
+| 4 | `Intensity` | 无条件上传 +0xec = cbIntensity3D：只在 AddContrast（alpha 输出 = −Intensity·A）、EdgeBlend（外缘色强度）、Multiply（alpha 输出 = min(Intensity·Va·a, 1)）读；AlphaBlend、Physical 不读。另名 BackIntensity / OuterIntensity / MultiplyBlackRate（引擎没有 "Intensity" 这个名字） | 已确认 | TA；primitivevfx PS |
+| 5 | `EdgeBlendRange` | 上传 +0x108 = cbEdgeBlendRange3D：EdgeBlend 的外缘权重 `e = (1 − A_tex)^EdgeBlendRange`，A_tex 为 TextureFilter 之后的贴图 alpha | 已确认 | TA, RT；primitivevfx PS |
+| 6 | `AlphaRate` | 上传 +0xe4 = cbAlphaRate：顶点 alpha 的指数，`a = max(Va, 1e-6)^AlphaRate · A`（GpuParticleVS 的 alphaRate 在 148） | 已确认 | TA, SHE；primitivevfx PS |
 
 - BlendType 枚举：AlphaBlend 0、Physical 1、AddContrast 2、EdgeBlend 3、Multiply 4；没有单纯的"加法"。语料：0 = 烟，1 = 辉光 / 火 / 火花，3 总配 Intensity > 0 和非白 ColorRange，4 总配 Intensity > 0。
 - 出生颜色：`(Flags>>4)&1` 为 1 时每通道 `lerp(Color, ColorRange, u)`，四通道共用一个 u；否则恰为 Color。写入粒子 +0x4c..+0x4f（RGBA8）。粒子标志 0x200000 时跳过（3cfcf50）。已确认（TA, RT）。
 - 条带头（3e10150，RibbonLength / Follow / Chain / FixEnd）在 7 个 dword 后接：`Flags`、`SizeScalar`（CenterSpread）、`WidthSize`（CenterSpread）、`TextureRepeatNum`、`ShadowMultiplier`（→ 常量 +0x178）。
-- 混合因子（src/dst）属于管线状态（推测在 vfxstates.vsdf，未解包）；ColorRate、Intensity、EdgeBlendRange、AlphaRate 在像素着色器里的组合未读（§7）。
+- 混合因子（src/dst）属于管线状态（推测在 vfxstates.vsdf，未解包）。像素着色器同时写 SV_Target0 与 SV_Target1（双源混合），各 BlendType 的颜色与 alpha 公式见 §7.2。
 
 ### 4.3 各 Type 的几何
 
@@ -950,9 +950,9 @@ UVSequenceModifier（逐粒子，替换宿主 UVSequence 的 T；调用紧跟 UV
 | 字段 | 含义 | 状态 | 依据 |
 |---|---|---|---|
 | `Rotation`、`SizeScalar`、`SizeX`、`SizeY` | CenterSpread；出生时写 +0x9c（滚转，弧度）、+0x80、+0x84、+0x88 | 已确认 | TA 3d187e0 |
-| `ShadowMultiplier` | → 着色器常量 +0x178 | 部分待确认 | TA |
+| `ShadowMultiplier` | → 常量 +0x178 = cbShadowMultiplier：primitivevfx_11 的单通道 pass 输出 `ShadowMultiplier × alpha`，低于阈值时丢弃（推定为粒子投影 pass） | 已确认（公式）；pass 的用途为推定 | TA；primitivevfx_11 PS |
 | `ParticleIgnoreScale`（u32 位域的首字节） | 位 3 = 忽略发射器缩放；位 0-2 → attr+0x68（未知）；位 4、5 写发射器标志（未知）。C# 的 EnableGroupColor / OcclusionByParticleShadow / Reserved 在 RE4 恒为 0 | 已确认（位 3） | TA 3d18511；语料值 8 |
-| `Offset` | via.Range：`±first`（镜像取反）→ 块 +0x154，second → +0x158，作为着色器常量；作用方向未读 | 部分待确认 | TA 3d1864d |
+| `Offset` | via.Range：`±first`（镜像取反）、second → cbOffset.xy。顶点着色器把四边形角点 c（±半宽、±半高）改为 `c + |c|·2·Offset`：中心沿面片的宽、高方向移动 Offset × 全宽 / 全高 | 已确认 | TA 3d1864d；primitivevfx VS |
 
 每帧 `p[+0xe8] = p[+0xec] = max(emitterScale.x, .y, .z)`（ParticleIgnoreScale 时为 1.0），尺寸随发射器最大缩放轴实时变化。宽 = U·X·p[+0xe8]、高 = U·Y·p[+0xec]（§3.3）。CPU 只把滚转角（镜像时 ×−1）写入实例；面向相机由着色器完成，未读。依据：TA、SCA、ROT。
 
@@ -975,13 +975,13 @@ UVSequenceModifier（逐粒子，替换宿主 UVSequence 的 T；调用紧跟 UV
 
 | 字段 | 含义 | 状态 | 依据 |
 |---|---|---|---|
-| `LengthFlags` | 位 0：条带轴取本帧位移方向；位 1：首次取到方向后锁定；位 2：位移改由上下文矩阵变体（3dfd840）测量；位 3：固定起点模式；位 9：固定起点模式下起点不随发射器重新变换；位 10 → +0x20c 位 16，未追踪 | 已确认（位 0-3、9） | SEM 3d7b3d0 |
+| `LengthFlags` | 位 0：条带轴取本帧位移方向；位 1：首次取到方向后锁定；位 2：位移改由上下文矩阵变体（3dfd840）测量；位 3：固定起点模式；位 5 或 6：逐点颜色取头尾渐变（否则点颜色为白）；位 7 或 8：逐点尺寸取渐变（否则 1.0）；位 9：固定起点模式下起点不随发射器重新变换；位 10 → +0x20c 位 16，未追踪 | 已确认（位 0-3、5-9） | SEM 3d7b3d0；Re4Native 实跑 |
 | `Length` | CenterSpread；出生写粒子 +0x88（= ScaleAnim 的 Y 槽） | 已确认 | SEM |
 | `ShapeDivision` | 沿长度的点数，夹在 [2, 1000] | 已确认 | SEM |
 | `BasingPoint` | AnchorPair：`length` 为纵向锚点 b；`width` 每粒子复制但 CPU 布局不用，GPU 路径上是横向锚点 | b 已确认；width 部分待确认 | SEM, SHE |
 | `ReleaseFixEnd` | CenterSpread；固定起点模式下的释放距离 | 已确认 | SEM |
 | `DirX/Y/Z` | CenterSpread；位 0 关时轴 = `normalize(rnd(DirX), rnd(DirY), rnd(DirZ))`，出生定死 | 已确认 | SEM |
-| `HeadColor`、`ColorPlace*`、`HeadScale`、`ScalePlace*` | 头尾渐变；CPU 路径怎样烘进逐段颜色 / 尺寸未追踪；GPU 路径不使用 | 部分待确认 | SHE |
+| `HeadColor`、`ColorPlace*`、`HeadScale`、`ScalePlace*` | CPU 逐点颜色（点 +0x44，RGBA8）与尺寸（点 +0x48）的头尾渐变，见下方；GPU 路径不使用 | 已确认 | Re4Native 实跑 |
 
 ```
 出生：L0 = rnd(Length) → p[+0x88]；d = 位0 ? 0（首次更新时填） : normalize(rnd(DirX..Z))
@@ -991,6 +991,18 @@ UVSequenceModifier（逐粒子，替换宿主 UVSequence 的 T；调用紧跟 UV
 固定起点（位 3，3d7c440）：tail 留在出生位置，head = 粒子，d = normalize(head − tail)，L = 距离；
   距离 × 缩放 ≥ ReleaseFixEnd 时释放（标志 2），之后按普通条带布局
 ```
+
+头尾渐变（LengthFlags 位 5/6 颜色、位 7/8 尺寸；N 个点，k = 0 为头部点，即 u = 0 一端；四通道分别插值）：
+
+```
+k1 = trunc(Place1Ratio · (N−1));  k2 = trunc(Place2Ratio · (N−1))
+k = 0:           Head
+0 < k ≤ k1:      lerp(Head, Place1, k / k1)
+k1 < k ≤ k2:     lerp(Place1, Place2, (k − k1) / (k2 − k1))
+k > max(k1, k2): Place2                   // k2 ≤ k1 时 Place1 之后直接是 Place2
+```
+
+颜色字节按插值后截断取整。数值由 Re4Native 在 cse010 torch 条目的临时副本上实跑得到：N = 5 / 9，比例取 0、0.3、0.35、0.5、0.7、0.8、0.85、1 以及 k2 < k1 的组合。同一实跑中，条带头 `Flags` 位 7 让点 +0x40 从 0..1 变为 0..Length（推定为按长度铺贴图）。
 
 宽度展开与朝向在着色器中完成（§7.2）。状态：已确认（SEM 3d7a460、3d7cac0）。
 
@@ -1182,14 +1194,14 @@ GPU 类型的出生、运动、动画都在计算着色器里完成；CPU 只把
 | `ShadowColor` | RGB ÷ 255 上传为 cbShadowColor，alpha 不上传。像素着色器的 Mie 散射分支按 `lerp(LitRGB, ShadowColor.rgb, t)` 混向阴影色，`t` 由密度相关量算出并夹到 [0, 1] | 已确认（Mie 散射分支）；其余分支未读 | SS；两代都读到使用 cbShadowColor 的像素着色器（MHWilds `primitiveVfx_Billboard3DLighting.vsdf` 块 0x699F1）。语料非黑：RE4 45 条（白 6、`FF050514` 39），MHWilds 32 条全为白 |
 | `RayleighCoeff`、`MieCoeff`、`MieShadowRatio` | 仅 ScatteringMode ≠ 0 时读取，否则用默认 0.15 / 0.15 / 0.2；RE4 从不开启 | 已确认 | SS |
 | `MieDropoff`、`AlphaScale`、`DensityScale`、`DensityMax`、`DensityMin`、`VolumeDepth`、`VolumetricIntensityBlend` | 体积参数；Density* 为百分数（×0.01） | 已确认（去向） | SS |
-| `unkn13` | 只读位 0 → 发射器标志 `+0x168` 位 13 → cbEffect3DFlags 位 10。置位时 primitivevfx 像素着色器跳过 cbIntensityScale 乘数，改走受 cbDetonemapRate 控制的颜色混合 | 部分待确认（只核对了 primitivevfx 像素分支） | SS；CPU 3d26236、3d264be，DXBC 块 0x78DE1。RE4 置位 750 条，MHWilds 全为 0 |
+| `unkn13` | 只读位 0 → 发射器标志 `+0x168` 位 13（3d26236），读取方与作用未知 | 部分待确认 | SS；加载器 3d27990 → attr+0x5c。RE4 置位 750 条，MHWilds 全为 0 |
 | `ScatteringMode` | 0 关、1..6 | 门控已确认 | SS |
 | `LightShadowRatio` | 阴影使受光粒子变暗的程度 → cbLightShadowRatio | 已确认 | SS |
 | `BackfaceLightRatio` | 背光透射；运行时 = 文件值 × 8 | 已确认 | SS |
 | `LightingOffsetX/Y/Z`、`LightingVelocityOffset` | 光照采样点偏移 / 沿速度的偏移 | 已确认（去向） | SS |
 | `InShadowDelay`、`TimeToFullShadow`、`OutShadowDelay`、`TimeToNoShadow` | 进出阴影的过渡时间，**毫秒** | 已确认 | SS |
-| `toggle_re4` | 按 `== 1` 读成布尔 → 发射器 `+0x168` 位 22（写入 3d2625a），读取方与视觉作用未知。MHWilds 布局没有这个字 | 部分待确认 | SS；RE4 开启 889 条 |
-| `DetonemapRatio` | 反色调映射比例：1 = 颜色按作者值到达屏幕，0 = 普通色调映射；不是亮度倍数 | 已确认 | SS → shader detonemapRate |
+| `toggle_re4` | DetonemapRatio 的开关：按 `== 1` 读成布尔（attr+0x94）→ 发射器 `+0x168` 位 22（3d2625a）→ 上传时右移 12 位成 cbEffect3DFlags 位 10（3d264be）。关时颜色乘 cbIntensityScale 与 cbEvOffsetPow2，DetonemapRatio 不读；开时走反色调映射分支（§7.2）。MHWilds 布局没有这个字 | 已确认 | SS；primitivevfx PS。RE4 开启 889 条；DetonemapRatio ≠ 1 的 532 条全部开启，关闭的 35935 条全部为 1 |
+| `DetonemapRatio` | 只在 toggle_re4 = 1 时生效。BlendType 0、1：在普通路径与反色调映射 `max(0, c / 曝光)` 之间按此比例插值，1 = 颜色按作者值到达屏幕；BlendType 2–4 不读此值，直接全量反色调映射。不是亮度倍数 | 已确认 | SS → shader cbDetonemapRate；primitivevfx PS |
 | `DeinterlaceDistance` | 进入运行时块（MHWilds：文件 +0x80，以 SoftParticleDistance 为 +0，经块构建器 0x1D60A1 写进块 +0x90；文本键 `DeinterlaceDistance` 在 0xADB3CDF 写同一槽）。何时切换交错或低分辨率绘制未读 | 去向已确认，作用待确认 | SS；RE4 5 ×35563、20 ×1261；MHWilds 全为 5 |
 | `AlphaCoverage` | 随机透明覆盖缩放 | 已确认（去向） | SS |
 | `SSRAlphaThreshold` | alpha 超过此值写入屏幕空间反射；0 = 不写 | 已确认 | SS |
@@ -1377,10 +1389,10 @@ lit / unlit 按 BlendType：0、2、4 直接相加；1 Physical：lit 乘增益 
 | 6 | 像素着色器：纹素采样（UVSequence 矩形、FrameBlend、UVScroll）；TexelChannelOperator 把纹素换成黑体色（Krystek 色度近似 → sRGB，乘 EmissiveRate·(T·4e-4)⁴，色相偏移、去饱和、加阴影色；常量 cbTexelChannelOperatorParam @512 由 CPU 打包）；TextureFilter 整形 `a' = (t²(3−2t)·a)^x`，`t = saturate((a−z)/(y−z))`，(x,y,z) = cbTextureFilter @432，无该属性时为恒等的 (1,0,0)，字段对应推定为 (TexelAlphaRate, HPThreshold, HPMinValue)；细节见 RE4-EFX-PREVIEW-P3-APPEARANCE | TCO 与 TextureFilter 公式已确认（pv4 b013、pv0 b020）；TextureFilter 字段对应、FrameBlend 采样部分待确认 | SFD, UVS, pv0/pv4 着色器 |
 | 7 | AlphaCorrection 按模式重映射 alpha | 已确认（GPU Billboard）；CPU 家族部分待确认 | AC |
 | 8 | RgbCommon / RgbWater 替换颜色计算（若存在） | 已确认（pv0/b020） | RW |
-| 9 | ColorRate、Intensity、EdgeBlendRange、AlphaRate、ShaderSettings.DetonemapRatio 进入最终颜色的方式 | 未读 | SHE, SS |
-| 10 | 混合：BlendType 决定 lit/unlit 处理与管线混合因子；混合因子在管线状态中 | 未读（因子）；分支部分待确认 | RW, SHE |
+| 9 | ColorRate、Intensity、EdgeBlendRange、AlphaRate、toggle_re4 / DetonemapRatio 进入最终颜色（§7.2） | 已确认 | primitivevfx PS |
+| 10 | 混合：BlendType 决定像素着色器分支（§7.2）；src/dst 混合因子在管线状态中 | 分支已确认；因子未读 | RW, SHE |
 
-模拟器在第 9、10 步需要自行选择：**折中实现**为 `rgb = 顶点RGB · 纹素RGB · ColorRate`，`alpha = 顶点A · 纹素A`；BlendType 0 用标准 alpha 混合，1 用加法。
+模拟器在第 10 步需要自行选择混合因子：**折中实现**为 BlendType 0 用标准 alpha 混合，1 用加法。
 
 ---
 
@@ -1520,6 +1532,29 @@ frontDirType 0、1 时条带绕自身长度轴转向相机，端视时退化成�
 
 **GpuRibbonLength 段构建**：条带从 `P − (1−bp.length)·L·d` 到 `P + bp.length·L·d` 分 N 段（与 CPU 公式一致）；`size0 = size1 = 0.5·a·b`（全宽 = a·b，推定 a、b 为 SizeScalar 与 Width，与实机"宽 = SizeScalar × Width"一致）；`basingPointX = BasingPoint.width`；`texCoordV = 1 − (i/N)·k`（k 推定为 TextureRepeatNum）；frontDirType = 粒子标志位 0 或类型 Flags 位 0（语料几乎总为模式 0）；段颜色 = 粒子颜色，无头尾渐变。
 
+**CPU 家族的颜色与 alpha（primitivevfx 像素着色器）**：14 个 primitivevfx 包中带混合分支的 1369 个像素着色器变体按 `(cbEffect3DFlags >> 11) & 15` 分五支，各支公式相同（部分变体在 Multiply 的 alpha 上多乘淡出项）。
+
+```
+T = 贴图 RGB（经 Rgb* 分层）；E = 分层的附加项（只有一条 Rgb* 路径非 0）；V、Va = 顶点颜色 RGB、alpha
+A_tex = TextureFilter 之后的贴图 alpha；A = A_tex 经 AlphaCorrection、软粒子、ContrastHighlighter 之后的值
+a = max(Va, 1e-6)^AlphaRate · A;   S = toggle_re4 ? 1 : cbIntensityScale;   G = cbEvOffsetPow2;   soft = 软粒子系数
+
+0 AlphaBlend   c = ColorRate·(T+E)·V                 rgb = c·G·S                       out.a = a
+1 Physical     k = 37.5·ColorRate·cbEvPow2·lum(T)²   rgb = S·soft·V·(T·(k+G) + E)      out.a = cbUsePhysicalAlphaBlend3D·a
+2 AddContrast  c = ColorRate·(T+E)·V·S               rgb = c·G                         out.a = −Intensity·A
+3 EdgeBlend    e = (1 − A_tex)^EdgeBlendRange
+               c = cbIntensityScale·(ColorRate·(E + 1 − e)·V + 100·e·Intensity·ColorRange.rgb·ColorRange.a)
+                                                     rgb = c·G                         out.a = a
+4 Multiply     c = ColorRate·(T+E)·V·S               rgb = c·G                         out.a = min(Intensity·Va·a, 1)
+
+toggle_re4 = 1 时：0、1 支 rgb = lerp(上式, max(0, c′ / 曝光), DetonemapRatio)，c′ 为不乘 S、G 的颜色（Physical 用 k + 1）；
+                  2–4 支 rgb = max(0, c / 曝光)，不读 DetonemapRatio
+曝光 = 自动曝光 · exposureAdjustment · max(1 − tonemapRange, 1e-4)
+最后：SV_Target0.rgb = rgb · 分级色（cbEffect3DFlags2 位 20）· rangeCompress · a；SV_Target1 = a（双源混合）
+```
+
+EdgeBlend 不用贴图 RGB：内侧是顶点颜色 × ColorRate，外缘是 ColorRange × Intensity，权重由贴图 alpha 决定。ColorRange 以 /255 上传（§4.2 序 2）。AddContrast 输出负 alpha，要配合管线混合因子才能读出最终效果。
+
 ### 7.3 未读部分
 
 | 内容 | 影响 |
@@ -1527,11 +1562,10 @@ frontDirType 0、1 时条带绕自身长度轴转向相机，端视时退化成�
 | primitivevfx 家族的面片四边形构建（Billboard3D 的面向相机、Rotation / Offset / SizeX / SizeY 的使用）| CPU 面片的几何 |
 | primitivevfx 家族的条带宽度展开（CPU RibbonLength / Follow / Chain / FixEnd / Trail / Strain） | 推定与 VSGpuRibbon 相同，部分待确认 |
 | primitivevfx 家族的 FadeByDepth 与 AlphaCorrection（偏移与打包相同，公式推定相同） | 低 |
-| ColorRate、Intensity、EdgeBlendRange、AlphaRate、DetonemapRatio、ContrastHighlighter 在 PS 中的组合；头部位 5 的作用 | 最终亮度与 alpha |
+| ContrastHighlighter 在 PS 中的组合；src/dst 混合因子 | 高光叠加；AddContrast 等的最终效果 |
 | 混合状态（src/dst 因子，推测在 vfxstates.vsdf） | 叠加方式 |
 | Polygon VS（`VSGpuPolygon`）、meshvfx PS | Polygon / Mesh 外观 |
 | 全部 GPU 计算着色器（GPU 类型的出生、运动、寿命、ScaleAnim、RotateAnim、Blink、Rgb* 寿命） | GPU 类型的逐粒子行为 |
-| CPU RibbonLength 的 HeadColor / ColorPlace / HeadScale / ScalePlace 烘焙 | 条带渐变 |
 
 ---
 
@@ -1558,7 +1592,6 @@ frontDirType 0、1 时条带绕自身长度轴转向相机，端视时退化成�
 | 15 | Velocity3D ScreenSpace 在 CPU 上的实际行为 | ScreenSpace 速度方向 | 3d1a9c0 | SEM |
 | 16 | UVSequence 余量 `frac·(1/60)`；Rotate90 方向 | speed ≠ 1 时的帧时刻 | 3d1eee9 | UVS |
 | 17 | RibbonTrail 头部布局：exe 读法与语料、C# 布局冲突（按 exe 读法官方文件 alpha 为 0） | 52 个官方 RibbonTrail 是否可见 | 一次只读实机检查粒子 +0x4c 即可判定 | RT |
-| 18 | CPU RibbonLength 的头尾颜色 / 尺寸渐变烘焙 | 条带渐变 | | SHE |
 | 19 | PtCollision 命中时清零 ctx+0x268（ParentOptions）逐粒子状态的第一个 dword（即跟随率）的效果；ctx+0x298 属性（每命中碰撞体缩放尺寸 / UV 旋转速度） | 命中后粒子是否脱离发射器 | 3d647e0、3dfa810 | PC |
 | 20 | CollisionFilter 两张表的含义（层 vs 掩码）、上下文默认层 / 掩码 | 碰撞对象选择 | 需对照 .cfil | PC |
 | 21 | PtLife Flags 位 0 与 Life 写同一发射器位 0x200000 的先后 | 子 Action 的释放 | 两个构建器都写 | PL, LF |
@@ -1566,7 +1599,7 @@ frontDirType 0、1 时条带绕自身长度轴转向相机，端视时退化成�
 | 23 | FixRandomGenerator 分组键 `[effectInstance+0x148]` 在两次播放间是否变化；E+0x118 / E+0x11c 的用途 | 分组发射器的变体选择 | | FRG |
 | 24 | Distortion 混合状态与是否存在第二遍 Blur；cbEffect3DFlags2 位 11-12、15 与 cbInterleaveScale 的来源 | 扭曲强度 | | SFD |
 | 25 | AlphaCorrection 模式 3 的 z 身份；模式 0 是否直通 | 未在语料中出现，影响小 | | AC |
-| 26 | Billboard3D 位域位 0-2、4-5，Polygon Flags2，Mesh 其余 Flags 位，ShaderSettings unkn13 / toggle_re4 / unkn24 | 少数文件 | | TA, TD, SS |
+| 26 | Billboard3D 位域位 0-2、4-5，Polygon Flags2，Mesh 其余 Flags 位，ShaderSettings unkn13 | 少数文件 | | TA, TD, SS |
 
 ### 8.1 笔记之间的矛盾
 

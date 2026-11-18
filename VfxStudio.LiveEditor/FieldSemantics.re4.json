@@ -215,8 +215,8 @@
         ] }
       },
       "ShadowColor": { "help": "阴影颜色，只用 RGB。体积散射着色时，粒子颜色按密度向这个颜色混合。", "status": "其他着色路径" },
-      "unkn13": { "help": "1 = 颜色不乘强度缩放，改按 DetonemapRatio 混合。只看最低位。", "status": "完整视觉效果" },
-      "toggle_re4": { "help": "1 = 打开；其他值等于关闭。", "status": "作用未知" },
+      "unkn13": { "help": "只看最低位。", "status": "作用未知" },
+      "toggle_re4": { "help": "1 = 打开 DetonemapRatio；其他值等于关闭。关闭时颜色走普通色调映射。" },
       "DeinterlaceDistance": { "help": "交错或低分辨率绘制的距离阈值。", "status": "作用" },
       "unkn24": { "help": "逐粒子方向的计算方式。0 不用；1 每帧按位置算；2 只在出生时算；3 每帧算并按 EmitterShape3D 的轴校正；4 出生时算并校正。" },
       "ScatteringMode": { "help": "0 = RayleighCoeff、MieCoeff、MieShadowRatio 不读文件值，改用默认 0.15 / 0.15 / 0.2；RE4 从不打开。" },
@@ -228,7 +228,7 @@
       "TimeToFullShadow": { "help": "进入阴影的过渡时间。", "unit": "毫秒" },
       "OutShadowDelay": { "help": "离开阴影前的延迟。", "unit": "毫秒" },
       "TimeToNoShadow": { "help": "离开阴影的过渡时间。", "unit": "毫秒" },
-      "DetonemapRatio": { "help": "颜色绕过色调映射的比例：1 = 按作者颜色到达屏幕，0 = 普通色调映射。不是亮度倍数。" },
+      "DetonemapRatio": { "help": "颜色绕过色调映射的比例：1 = 按作者颜色到达屏幕，0 = 普通色调映射。不是亮度倍数。BlendType 为 AlphaBlend、Physical 时才读；其他混合方式打开开关后总是完全绕过。", "when": {"field": "toggle_re4", "in": [1], "why": "toggle_re4 未打开：颜色走普通色调映射"} },
       "SSRAlphaThreshold": { "help": "alpha 超过此值写入屏幕空间反射；0 = 不写。" },
       "StencilTarget": { "help": "只读低字节；Flags 位 13 打开时生效。", "when": {"field": "Flags", "shift": 13, "in": [1], "why": "Flags 位 13（启用 StencilTarget）未置位"} },
       "ParticleShadingRate": { "help": "可变速率着色：多少个像素共用一次着色。只用低 3 位，255 = 默认。", "bits": { "summary": "着色速率", "groups": [ { "shift": 0, "width": 3, "label": "速率", "options": [ "1×1", "1×2", "2×1", "2×2", "2×4", "4×2", "4×4", "默认" ] } ] } },
@@ -400,14 +400,15 @@
       "Flags": { "help": "公共颜色头。", "bits": "colorHeader" },
       "Color": { "help": "出生颜色（RGBA8）。" },
       "ColorRange": { "help": "Flags 0x10 时出生颜色 = lerp(Color, ColorRange, u)，四通道共用一个 u。EdgeBlend 时是外缘色。", "when": {"any": [{"field": "Flags", "shift": 4, "in": [1]}, {"field": "Flags", "shift": 0, "width": 4, "in": [3], "why": ""}], "why": "Flags 0x10（出生颜色随机）未置位，混合方式也不是 EdgeBlend"} },
-      "ColorRate": { "help": "颜色倍率，官方发光层的亮度旋钮。", "status": "在着色器里怎样参与颜色" },
-      "Intensity": { "help": "无条件上传；官方只在 EdgeBlend / Multiply 时设为非 0。", "status": "在着色器里怎样参与颜色" },
+      "ColorRate": { "help": "颜色倍率，所有混合方式都乘进 RGB；Physical 还按贴图亮度的平方放大发光（×37.5）；EdgeBlend 时是内侧颜色的强度。" },
+      "Intensity": { "help": "AddContrast：压暗背景的强度；EdgeBlend：外缘颜色（ColorRange）的强度；Multiply：乘进 alpha。AlphaBlend、Physical 不读。" },
       "Rotation": { "help": "出生时的滚转角。", "unit": "弧度" },
       "SizeScalar": { "help": "统一尺寸槽。宽 = SizeScalar·SizeX·发射器最大缩放轴，高 = SizeScalar·SizeY·同。" },
       "SizeX": { "help": "宽度系数，与 SizeScalar 相乘。" },
       "SizeY": { "help": "高度系数，与 SizeScalar 相乘。" },
       "ParticleIgnoreScale": { "help": "RE4 里是位域：位 3 = 尺寸不乘发射器缩放（官方值 8）；其他位未知。" },
-      "Offset": { "help": "第一个数（镜像时取反）与第二个数作为着色器常量。", "status": "作用方向" }
+      "ShadowMultiplier": { "help": "粒子投影的浓度：投影 pass 写入 ShadowMultiplier × alpha。" },
+      "Offset": { "help": "面片中心的偏移，以面片全宽 / 全高为单位：第一个数沿宽度方向（镜像时取反），第二个数沿高度方向。" }
     },
     "TypeBillboard2D": {
       "Flags": { "help": "公共颜色头。", "bits": "colorHeader" },
@@ -460,6 +461,10 @@
           { "shift": 1, "width": 1, "label": "位 1：首次取到方向后锁定" },
           { "shift": 2, "width": 1, "label": "位 2：位移改由上下文矩阵测量" },
           { "shift": 3, "width": 1, "label": "位 3：固定起点模式" },
+          { "shift": 5, "width": 1, "label": "位 5：颜色按 HeadColor / ColorPlace 渐变" },
+          { "shift": 6, "width": 1, "label": "位 6：同位 5" },
+          { "shift": 7, "width": 1, "label": "位 7：尺寸按 HeadScale / ScalePlace 渐变" },
+          { "shift": 8, "width": 1, "label": "位 8：同位 7" },
           { "shift": 9, "width": 1, "label": "位 9：固定起点不随发射器重新变换" },
           { "shift": 10, "width": 1, "label": "位 10（未追踪）" }
         ] }
@@ -469,6 +474,16 @@
       "Length": { "help": "出生长度，写入 ScaleAnim 的 Y 槽（SizeYAdd 会拉长它）。", "unit": "米" },
       "ShapeDivision": { "help": "沿长度的点数，夹在 [2, 1000]。" },
       "BasingPoint": { "help": "length：纵向锚点 b，尾 = P − (1 − b)·L·d，头 = P + b·L·d（0 全在粒子后，1 全在前）；width：横向锚点，只在 GPU 路径读到。" },
+      "HeadColor": { "help": "头部点（u = 0 一端）的颜色；颜色从这里经 ColorPlace1、ColorPlace2 线性渐变。", "when": {"any": [{"field": "LengthFlags", "shift": 5, "in": [1]}, {"field": "LengthFlags", "shift": 6, "in": [1]}], "why": "LengthFlags 位 5、6 都未置位：点颜色为白"} },
+      "ColorPlace1": { "help": "第一个关键点的颜色，位于第 trunc(ColorPlace1Ratio·(N−1)) 个点（从头部数）。", "when": {"any": [{"field": "LengthFlags", "shift": 5, "in": [1]}, {"field": "LengthFlags", "shift": 6, "in": [1]}], "why": "LengthFlags 位 5、6 都未置位：点颜色为白"} },
+      "ColorPlace2": { "help": "第二个关键点的颜色；之后的点都取这个颜色。", "when": {"any": [{"field": "LengthFlags", "shift": 5, "in": [1]}, {"field": "LengthFlags", "shift": 6, "in": [1]}], "why": "LengthFlags 位 5、6 都未置位：点颜色为白"} },
+      "ColorPlace1Ratio": { "help": "ColorPlace1 的位置，0 = 头部，1 = 尾部；按点取整。", "when": {"any": [{"field": "LengthFlags", "shift": 5, "in": [1]}, {"field": "LengthFlags", "shift": 6, "in": [1]}], "why": "LengthFlags 位 5、6 都未置位：点颜色为白"} },
+      "ColorPlace2Ratio": { "help": "ColorPlace2 的位置；不大于 ColorPlace1Ratio 时 ColorPlace1 之后直接是 ColorPlace2。", "when": {"any": [{"field": "LengthFlags", "shift": 5, "in": [1]}, {"field": "LengthFlags", "shift": 6, "in": [1]}], "why": "LengthFlags 位 5、6 都未置位：点颜色为白"} },
+      "HeadScale": { "help": "头部点的宽度倍率；经 ScalePlace1、ScalePlace2 线性渐变。", "when": {"any": [{"field": "LengthFlags", "shift": 7, "in": [1]}, {"field": "LengthFlags", "shift": 8, "in": [1]}], "why": "LengthFlags 位 7、8 都未置位：点尺寸为 1"} },
+      "ScalePlace1": { "help": "第一个关键点的宽度倍率。", "when": {"any": [{"field": "LengthFlags", "shift": 7, "in": [1]}, {"field": "LengthFlags", "shift": 8, "in": [1]}], "why": "LengthFlags 位 7、8 都未置位：点尺寸为 1"} },
+      "ScalePlace2": { "help": "第二个关键点的宽度倍率；之后的点都取这个值。", "when": {"any": [{"field": "LengthFlags", "shift": 7, "in": [1]}, {"field": "LengthFlags", "shift": 8, "in": [1]}], "why": "LengthFlags 位 7、8 都未置位：点尺寸为 1"} },
+      "ScalePlace1Ratio": { "help": "ScalePlace1 的位置，0 = 头部，1 = 尾部；按点取整。", "when": {"any": [{"field": "LengthFlags", "shift": 7, "in": [1]}, {"field": "LengthFlags", "shift": 8, "in": [1]}], "why": "LengthFlags 位 7、8 都未置位：点尺寸为 1"} },
+      "ScalePlace2Ratio": { "help": "ScalePlace2 的位置；不大于 ScalePlace1Ratio 时 ScalePlace1 之后直接是 ScalePlace2。", "when": {"any": [{"field": "LengthFlags", "shift": 7, "in": [1]}, {"field": "LengthFlags", "shift": 8, "in": [1]}], "why": "LengthFlags 位 7、8 都未置位：点尺寸为 1"} },
       "ReleaseFixEnd": { "help": "固定起点模式下拉到这个距离后释放。", "unit": "米", "when": {"field": "LengthFlags", "shift": 3, "in": [1], "why": "LengthFlags 位 3（固定起点模式）未置位"} },
       "DirX": { "help": "LengthFlags 位 0 关时，条带轴 = normalize(DirX, DirY, DirZ)，出生时定死。", "when": {"field": "LengthFlags", "shift": 0, "not": [0], "why": "LengthFlags 位 0 置位：条带轴取本帧位移方向"} },
       "DirY": { "help": "LengthFlags 位 0 关时，条带轴 = normalize(DirX, DirY, DirZ)，出生时定死。", "when": {"field": "LengthFlags", "shift": 0, "not": [0], "why": "LengthFlags 位 0 置位：条带轴取本帧位移方向"} },
@@ -592,9 +607,9 @@
   },
   "bitSets": {
     "colorHeader": { "summary": "公共颜色头：混合方式与出生颜色随机", "groups": [
-      { "shift": 0, "width": 4, "label": "混合方式（取值对应部分待确认）", "options": [ "AlphaBlend", "Physical", "AddContrast", "EdgeBlend", "Multiply" ] },
+      { "shift": 0, "width": 4, "label": "混合方式", "options": [ "AlphaBlend", "Physical", "AddContrast", "EdgeBlend", "Multiply" ] },
       { "shift": 4, "width": 1, "label": "0x10：出生颜色在 Color 与 ColorRange 之间随机" },
-      { "shift": 5, "width": 1, "label": "0x20（作用未知）" }
+      { "shift": 5, "width": 1, "label": "0x20：Physical 时写出 alpha（否则纯加法）" }
     ] }
   }
 }

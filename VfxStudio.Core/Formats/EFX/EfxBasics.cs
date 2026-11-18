@@ -411,8 +411,7 @@ public partial class EFXAttributeShaderSettings : EFXAttribute
 	// 百分比，运行时 ×0.01。
 	public float DensityMax;
 	public float DensityMin;
-	// 只用位 0：发射器标志位 13 → cbEffect3DFlags 位 10。置位时像素着色器不乘 cbIntensityScale，
-	// 改走受 cbDetonemapRate 控制的颜色混合。
+	// 只用位 0，写入发射器标志位 13；读取方未知。
 	public uint unkn13;
 	// 无引擎名（旧名 unkn14）：0 = 不用散射参数。
 	public uint ScatteringMode;
@@ -443,13 +442,15 @@ public partial class EFXAttributeShaderSettings : EFXAttribute
 	public float OutShadowDelay;
 	public float TimeToNoShadow;
 
-	// 引擎按 "== 1" 判断（值 2 等于关闭），置位发射器 +0x168 位 22；读取方与作用未知。
+	// DetonemapRatio 的开关，引擎按 "== 1" 判断（值 2 等于关闭）：发射器 +0x168 位 22 → cbEffect3DFlags 位 10。
+	// 关时像素着色器乘 cbIntensityScale、走普通色调映射，不读 DetonemapRatio。
     [RszVersionExact(EfxVersion.RE4)]
 	public uint toggle_re4;
 	// MHWilds：exe 构建器不读这个字。
     [RszVersion(EfxVersion.DD2)]
 	public float dd2_unkn1;
-	// 着色器 detonemapRate：粒子颜色绕过色调映射的比例（旧名 ColorBrightness，**不是亮度**）。
+	// 着色器 detonemapRate：粒子颜色绕过色调映射的比例（旧名 ColorBrightness，**不是亮度**）。RE4 只在 toggle_re4 = 1
+	// 且 BlendType 为 0、1 时读；BlendType 2–4 打开 toggle_re4 后直接全量绕过。
     [RszVersion(EfxVersion.RE2)]
 	public float DetonemapRatio;
 
