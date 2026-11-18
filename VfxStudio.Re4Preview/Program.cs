@@ -511,7 +511,7 @@ JsonObject CompositionReport() => new()
     ["softParticles"]=composition.SoftParticles,["depthBias"]=composition.DepthBias,["detonemap"]=composition.Detonemap,
     ["alphaRate"]=composition.AlphaRate,["sortEntries"]=composition.SortEntries,["sortWithinEntry"]=composition.SortWithinEntry,
     ["decals"]=composition.Decals,["decalScale"]=composition.DecalScale,["decalScaleXYRandom"]=composition.DecalScaleXYRandom,
-    ["physicalGain"]=composition.PhysicalGain,
+    ["physicalGain"]=composition.PhysicalGain,["physicalEvPow2"]=composition.PhysicalEvPow2,
     ["textureFilter"]=composition.TextureFilter,["texelChannel"]=composition.TexelChannel,["frameBlend"]=composition.FrameBlend,
     ["lighting"]=composition.Lighting,["distortion"]=composition.Distortion,["ambient"]=composition.Ambient.X,["keyLight"]=composition.KeyLight,
     ["blends"]=new JsonArray(composition.Blends.Select((b,i)=>(JsonNode?)new JsonObject{["blend"]=i,["source"]=b.Source.ToString(),["destination"]=b.Destination.ToString()}).ToArray()),
@@ -717,6 +717,7 @@ void BeginControl(PreviewControlRequest job)
                 ("decals",v=>composition.Decals=v),("decalScaleXYRandom",v=>composition.DecalScaleXYRandom=v)})
                 if(a[name]!=null) setter(PreviewControlReports.Bool(a,name));
             if(PreviewControlReports.Float(a,"physicalGain",0,16) is float g) composition.PhysicalGain=g;
+            if(PreviewControlReports.Float(a,"physicalEvPow2",0,1) is float ev) composition.PhysicalEvPow2=ev;
             if(PreviewControlReports.Float(a,"ambient",0,4) is float amb) composition.Ambient=new(amb);
             if(PreviewControlReports.Float(a,"keyLight",0,4) is float key) composition.KeyLight=key;
             if(PreviewControlReports.Float(a,"decalScale",.01f,100) is float ds) composition.DecalScale=ds;
@@ -997,7 +998,7 @@ void DrawComposition()
     composition.SoftParticles=Toggle("软粒子",composition.SoftParticles);
     composition.DepthBias=Toggle("深度偏移",composition.DepthBias);
     composition.Detonemap=Toggle("反色调映射（DetonemapRatio）",composition.Detonemap);
-    composition.AlphaRate=Toggle("alpha 乘颜色头 AlphaRate",composition.AlphaRate);
+    composition.AlphaRate=Toggle("alpha 乘顶点 alpha 的 AlphaRate 次方",composition.AlphaRate);
     composition.SortEntries=Toggle(scene?.Graph.EmitterPriority==true?"entry 排序（EmitterPriority：按文件顺序）":"entry 按距离排序",composition.SortEntries);
     if(ImGui.IsItemHovered()) ImGui.SetTooltip("文件的 Root entry 带 EmitterPriority 时按 entry 顺序绘制（靠后的在上面），否则按到相机的距离从远到近。关闭则一律按文件顺序。");
     composition.SortWithinEntry=Toggle("entry 内按深度排序",composition.SortWithinEntry);
@@ -1026,6 +1027,9 @@ void DrawComposition()
     if(ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled)) ImGui.SetTooltip("预览没有场景光源：受光粒子按 环境光 + 主光 × 半 Lambert 着色（主光从右上前方照来）。");
     float gain=composition.PhysicalGain;
     if(ImGui.SliderFloat("Physical 受光增益",ref gain,0,4)) composition.PhysicalGain=gain;
+    float ev=composition.PhysicalEvPow2;
+    if(ImGui.SliderFloat("Physical 发光曝光",ref ev,.0005f,.25f,"%.4f",ImGuiSliderFlags.Logarithmic)) composition.PhysicalEvPow2=ev;
+    if(ImGui.IsItemHovered()) ImGui.SetTooltip("Physical 发光项 37.5 × ColorRate × 本值 × 贴图亮度²。游戏里本值是场景曝光 cbEvPow2，预览没有，按这里取。");
     string[] blendNames=["0 AlphaBlend","1 Physical","2 AddContrast","3 EdgeBlend","4 Multiply"];
     string factors=string.Join("\0",Enum.GetNames<BlendFactor>())+"\0";
     for(int b=0;b<5;b++)
@@ -1040,7 +1044,7 @@ void DrawComposition()
     if(scene?.AtTable(SelectedTable())?.Document is {} doc)
     {
         var a=EntryAppearance.From(doc.Entry);
-        ImGui.TextWrapped($"所选 entry：软粒子 {a.SoftParticleDistance:G3} m · 深度偏移 {a.DepthBias:G3} · Detonemap {a.DetonemapRatio:G3}"+
+        ImGui.TextWrapped($"所选 entry：软粒子 {a.SoftParticleDistance:G3} m · 深度偏移 {a.DepthBias:G3} · Detonemap {(a.Detonemap?a.DetonemapRatio.ToString("G3"):"关")}"+
             (a.FadeDepth!=null?" · FadeByDepth":"")+(a.FadeAngle!=null?" · FadeByAngle":"")+(a.AlphaCorrection is {} ac?$" · AlphaCorrection 模式 {ac.Mode}":"")+
             (a.RgbCommon!=null?" · RgbCommon":"")+(a.RgbWater!=null?" · RgbWater":""));
     }

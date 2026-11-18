@@ -16,7 +16,10 @@ public sealed class EntryUniforms
     public Vector4 FadeDepth = new(float.MinValue, float.MinValue, float.MaxValue, float.MaxValue);
     public float Cone, Spread, AngleAlphaRate;
     public Vector3 ConeDir = Vector3.UnitZ, Emitter;
+    /// <summary>Detonemap: the bypass rate actually used (0 when toggle_re4 is off; 1 for BlendType 2–4).</summary>
     public float SoftDistance, DepthBias, Detonemap, PhysicalGain = 1;
+    /// <summary>Stand-in for cbEvPow2 in Physical's glow term (<see cref="CompositionConfig.PhysicalEvPow2"/>).</summary>
+    public float PhysicalEvPow2 = 1 / 64f;
     public RgbCommonSettings? Common;
     public RgbWaterSettings? Water;
     public float Exposure = 1, Near = .05f, Far = 100;
@@ -43,7 +46,9 @@ public sealed class EntryUniforms
         {
             Blend = header.Blend, ColorRate = header.ColorRate, Intensity = header.Intensity, EdgeBlendRange = header.EdgeBlendRange,
             AlphaRate = header.AlphaRate, ColorRange = header.ColorRange, Emitter = emitter, PhysicalGain = config.PhysicalGain,
-            SoftDistance = a.SoftParticleDistance, DepthBias = a.DepthBias, Detonemap = a.DetonemapRatio
+            PhysicalEvPow2 = config.PhysicalEvPow2, SoftDistance = a.SoftParticleDistance, DepthBias = a.DepthBias,
+            // toggle_re4 off: normal tone mapping, DetonemapRatio unread. On: BlendType 0/1 bypass by DetonemapRatio, 2–4 fully.
+            Detonemap = !a.Detonemap ? 0 : header.Blend <= 1 ? a.DetonemapRatio : 1
         };
         if (config.Fades && a.FadeDepth is { } depth) { u.Flags |= FadeDepthBit; u.FadeDepth = depth; }
         if (config.Fades && a.FadeAngle is { } angle)
@@ -57,7 +62,7 @@ public sealed class EntryUniforms
         else if (config.RgbLayers && a.RgbWater is { } water) { u.Flags |= RgbWaterBit; u.Water = water; }
         if (config.SoftParticles && a.SoftParticleDistance > 0) u.Flags |= SoftBit;
         if (config.DepthBias && a.DepthBias != 0) u.Flags |= DepthBiasBit;
-        if (config.Detonemap && a.DetonemapRatio != 0) u.Flags |= DetonemapBit;
+        if (config.Detonemap && u.Detonemap != 0) u.Flags |= DetonemapBit;
         if (config.AlphaRate) u.Flags |= AlphaRateBit;
         if (config.TextureFilter && a.TextureFilter is { } tf) { u.Flags |= TextureFilterBit; u.TextureFilter = tf; }
         if (config.Lighting && a.Lit)
@@ -130,7 +135,7 @@ public sealed class EntryUniforms
         V(w2?.SpecularColor.X ?? 0, w2?.SpecularColor.Y ?? 0, w2?.SpecularColor.Z ?? 0, w2?.SpecularColor.W ?? 0);
         V(w2?.SheetColor.X ?? 0, w2?.SheetColor.Y ?? 0, w2?.SheetColor.Z ?? 0, w2?.SheetColor.W ?? 0);
         V(w2?.SpecularIntensity ?? 0, w2?.SheetIntensity ?? 0, w2?.GtoB ?? 0, w2?.Alpha ?? 0);
-        V(Exposure, Near, Far, 0);                                          // view
+        V(Exposure, Near, Far, PhysicalEvPow2);                             // view
         V(TextureFilter.X, TextureFilter.Y, TextureFilter.Z, 0);            // textureFilterP
         I(unchecked((int)TexelChannel[0]), unchecked((int)TexelChannel[1]), unchecked((int)TexelChannel[2]), unchecked((int)TexelChannel[3])); // tcoP
         V(Ambient.X, Ambient.Y, Ambient.Z, KeyLight);                       // lightA
@@ -163,7 +168,7 @@ public static class AppearanceShaderLibrary
             vec4 waterSpec;
             vec4 waterSheet;
             vec4 waterP;       // SpecularIntensity, SheetIntensity, GtoB, Alpha
-            vec4 viewP;        // exposure, near, far
+            vec4 viewP;        // exposure, near, far, Physical EvPow2
             vec4 textureFilterP; // TexelAlphaRate, HPThreshold, HPMinValue
             uvec4 tcoP;        // packed cbTexelChannelOperatorParam
             vec4 lightA;       // ambient rgb, key intensity
@@ -289,7 +294,7 @@ public static class AppearanceShaderLibrary
             if (hasFlag(512) && !hasFlag(8) && !hasFlag(16)) tex.w = textureFilter(tex.w, textureFilterP.xyz);
             vec3 L = hasFlag(2048) ? particleLight : vec3(1.0);
             float alpha = hasFlag(4) ? alphaCorrect(tex.w, vertex.w, acBytes) : tex.w * vertex.w;
-            if (hasFlag(256)) alpha *= header.w;
+            float alphaRate = hasFlag(256) ? pow(max(vertex.w, 1e-6), header.w) : 1.0;
             vec3 rgb;
             if (hasFlag(8)) {
                 vec3 lit, unlit;
@@ -304,11 +309,14 @@ public static class AppearanceShaderLibrary
                 lit *= L;
                 rgb = blend == 1 ? lit * shading.w * vertex.rgb : blend == 3 ? vec3(0.0) : lit;
             } else if (blend == 3) {
-                float t = clamp(tex.w / max(header.z, 1e-4), 0.0, 1.0);
-                rgb = mix(colorRange.rgb * header.y, vertex.rgb * header.x, t) * tex.rgb * L;
+                float e = pow(max(1.0 - tex.w, 0.0), header.z);
+                rgb = (vertex.rgb * (header.x * (1.0 - e)) + colorRange.rgb * (100.0 * e * header.y * colorRange.w)) * L;
+            } else if (blend == 1) {
+                float lum = dot(tex.rgb, vec3(0.2126, 0.7152, 0.0722));
+                rgb = vertex.rgb * tex.rgb * (37.5 * header.x * viewP.w * lum * lum + 1.0) * soft * L;
             } else rgb = vertex.rgb * tex.rgb * header.x * L;
-            alpha *= soft;
-            if (blend == 4) return vec4(mix(vec3(1.0), rgb, alpha), alpha);
+            alpha *= soft * alphaRate;
+            if (blend == 4) { float w = min(header.y * vertex.w * alpha, 1.0); return vec4(mix(vec3(1.0), rgb, w), w); }
             if (hasFlag(128) && shading.z != 0.0) {
                 vec3 inv = vec3(inverseAces(rgb.r), inverseAces(rgb.g), inverseAces(rgb.b)) / max(viewP.x, 1e-4);
                 rgb = mix(rgb, inv, shading.z);

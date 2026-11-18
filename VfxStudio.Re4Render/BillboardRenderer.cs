@@ -378,7 +378,8 @@ public sealed unsafe class BillboardRenderer : IDisposable
     }
 
     public PreviewTypeKind Kind => document.Kind;
-    public int Blend(PreviewFrame frame) => ColorHeader.From(State(frame), document).Blend;
+    /// <summary>The blend slot this entry draws with (<see cref="ColorHeader.BlendState"/>).</summary>
+    public int Blend(PreviewFrame frame) => ColorHeader.From(State(frame), document).BlendState;
 
     public PreviewEntryState State(PreviewFrame frame)
     {
@@ -545,7 +546,7 @@ public sealed unsafe class BillboardRenderer : IDisposable
         gl.BindBufferBase(BufferTargetARB.UniformBuffer,3,entryBuffer);
         gl.Disable(EnableCap.CullFace); gl.Enable(EnableCap.DepthTest); gl.DepthMask(false);
         gl.Enable(EnableCap.Blend);
-        var pair=config.Blends[header.Blend];
+        var pair=config.Blends[header.BlendState];
         gl.BlendFuncSeparate(Gl(pair.Source),Gl(pair.Destination),BlendingFactor.One,BlendingFactor.OneMinusSrcAlpha);
         // Distortion replaces the scene where its coverage mask is set (A >= 0.01; inferred, the blend state is not read).
         // It writes the scene colour only: the bloom target keeps what lies underneath (a cleared or overwritten

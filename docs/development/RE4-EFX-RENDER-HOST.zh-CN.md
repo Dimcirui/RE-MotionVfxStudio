@@ -333,36 +333,36 @@ GPU 类型的出生、运动、寿命都在计算着色器中（规格 §4.3.12�
 | 6 | 纹素采样（UV 矩形、FrameBlend、UVScroll） | PS | 部分待确认 |
 | 7 | AlphaCorrection 按模式重映射 alpha | PS | GPU Billboard 已确认；CPU 家族部分待确认 |
 | 8 | RgbCommon / RgbWater 替换颜色计算 | PS | 已确认（一个变体） |
-| 9 | ColorRate、Intensity、EdgeBlendRange、AlphaRate、DetonemapRatio 的组合 | PS | 未读，折中见 §6.2 |
+| 9 | ColorRate、Intensity、EdgeBlendRange、AlphaRate、DetonemapRatio 的组合 | PS | 已读（规格 §7.2），实现见 §6.2 |
 | 10 | 混合因子 | 管线状态 | 未读，折中见 §6.3 |
 
 第 5、7、8 步按规格公式原样实现。规格中的 `dof` 项来源未写，承载器取 1。
 
 ### 6.2 颜色头的别名与折中（第 9 步）
 
-颜色头 7 个 dword（规格 §4.2）中，ColorRate（+0x10c）与 Intensity（+0xec）按混合方式另有引擎名。下表的折中是规格 §4.10 默认式 `rgb = 顶点RGB · 纹素RGB · ColorRate`、`alpha = 顶点A · 纹素A` 的扩展：
+颜色头 7 个 dword（规格 §4.2）中，ColorRate（+0x10c）与 Intensity（+0xec）按混合方式另有引擎名。各混合方式的颜色式照搬规格 §7.2 读出的像素着色器；V、Va 为顶点颜色与 alpha，T 为纹素，`a` 为 AlphaCorrection 后的 alpha（已含一次 Va）：
 
-| BlendType | ColorRate 别名 | Intensity 别名 | 承载器折中 |
+| BlendType | ColorRate 别名 | Intensity 别名 | 预览 |
 |---|---|---|---|
-| 0 AlphaBlend | ColorRate | BackIntensity | 默认式 |
-| 1 Physical | EmissionRate | （无专名） | 默认式；RgbCommon 存在时 lit 部分的增益 K 取 1 |
-| 2 AddContrast | ContrastRate | （无专名） | 默认式 |
-| 3 EdgeBlend | InnerIntensity | OuterIntensity | `t = saturate(纹素A / max(EdgeBlendRange, 1e-4))`；`rgb = lerp(ColorRange·OuterIntensity, 顶点RGB·InnerIntensity, t) · 纹素RGB`；丢弃 lit 部分（规格 §4.9） |
-| 4 Multiply | MultiplyColorRate | MultiplyBlackRate | `rgb = lerp(1, 顶点RGB · 纹素RGB · MultiplyColorRate, alpha)`，MultiplyBlackRate 不参与 |
+| 0 AlphaBlend | ColorRate | BackIntensity | `rgb = V · T · ColorRate` |
+| 1 Physical | EmissionRate | （无专名） | `rgb = V · T · (37.5 · ColorRate · EvPow2 · lum(T)² + 1) · soft`；EvPow2 是场景曝光 cbEvPow2，预览没有，取合成配置 `physicalEvPow2`（默认 1/64，折中）。RgbCommon 存在时 lit 部分的增益 K 取 1 |
+| 2 AddContrast | ContrastRate | BackIntensity | `rgb = V · T · ColorRate`；游戏输出 alpha = −Intensity·A，靠管线混合因子压暗背景，因子未读，预览按加法（折中） |
+| 3 EdgeBlend | InnerIntensity | OuterIntensity | `e = (1 − T.a)^EdgeBlendRange`；`rgb = V · ColorRate · (1 − e) + 100 · e · Intensity · ColorRange.rgb · ColorRange.a`，不用纹素 RGB；Rgb 层时丢弃 lit 部分（规格 §4.9） |
+| 4 Multiply | MultiplyColorRate | MultiplyBlackRate | `w = min(Intensity · Va · a, 1)`；`rgb = lerp(1, V · T · ColorRate, w)` |
 
-- AlphaRate（+0xe4）：折中为 alpha 再乘 AlphaRate。先统计语料取值；若几乎全为 1，该折中对画面没有影响。
-- DetonemapRatio：1 表示作者颜色原样到达屏幕（规格 §4.4，已确认）。承载器的色调映射曲线已知，折中为 `rgb = lerp(rgb, 逆色调映射(rgb), DetonemapRatio)`。
-- 头部位 5（常量 +0x110 = 1.0）作用未知，忽略。
+- AlphaRate（+0xe4）：`a ×= max(Va, 1e-6)^AlphaRate`，0 = 不变（规格 §7.2）。合成配置里默认打开。
+- DetonemapRatio：只在 ShaderSettings.toggle_re4 = 1 时生效（规格 §4.4）。BlendType 0、1 按 DetonemapRatio、2–4 全量做 `rgb = lerp(rgb, 逆色调映射(rgb) / 曝光, 比例)`；游戏是除以曝光，预览的合成另有 ACES 曲线，所以再取逆 ACES（折中）。
+- 头部位 5（常量 +0x110 = cbUsePhysicalAlphaBlend3D）：Physical 写出 alpha。预览对这类 entry 改用 BlendType 0 的混合因子；没有位 5 时 Physical 按加法。
 
 ### 6.3 混合方式与排序（第 10 步）
 
 | BlendType | 折中混合 |
 |---|---|
 | 0 AlphaBlend | `SrcAlpha, OneMinusSrcAlpha` |
-| 1 Physical | `SrcAlpha, One`（规格 §4.10 的折中） |
+| 1 Physical | `SrcAlpha, One`；头部位 5 时同 0 |
 | 2 AddContrast | `SrcAlpha, One` |
 | 3 EdgeBlend | `SrcAlpha, OneMinusSrcAlpha` |
-| 4 Multiply | `DstColor, Zero`（颜色已按 §6.2 预先向 1 插值） |
+| 4 Multiply | `DstColor, Zero`（颜色已按 §6.2 的权重 w 预先向 1 插值） |
 
 排序：发射器级按 (PriorityBias, 到相机距离 + DistanceBias) 从远到近；文件的 Root entry（第 0 个、没有 Type 的 entry）带 EmitterPriority 时，第二个键换成文件顺序：靠后的 entry 画在上面，不看距离。RE4 有 573 个文件用它，全部放在 Root entry 上；这和 RE Engine 编辑器的演示一致（RE:2023 讲座：Root 节点勾选 EmitterPriority 后，按节点列表的 Priority 顺序绘制，不再按远近）。节点图的 Root 节点显示这个开关，右键 Root 可以开启或关闭（在 Root entry 上添加或删除 EmitterPriority；文件没有 Root entry 时不可用）。发射器内按槽号顺序，不排序。游戏的排序键与发射器内是否排序都未读（ShaderSettings 的 DistanceBias 单位为推定，规格 §4.4），折中实现；检查器提供"发射器内按深度排序"开关用于对照。粒子写深度测试、不写深度。
 

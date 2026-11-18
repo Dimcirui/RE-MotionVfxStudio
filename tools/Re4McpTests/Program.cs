@@ -340,7 +340,7 @@ try
     Check(!error && outcome["result"]?["displayedTick"]?.GetValue<int>() == 0, "replay reloads and pauses at tick 0", outcome.ToJsonString());
     (error, outcome, _) = await Tool("composition");
     var order = outcome["result"]?["drawOrder"]?.AsArray();
-    Check(!error && outcome["result"]?["detonemap"]?.GetValue<bool>() == true && outcome["result"]?["alphaRate"]?.GetValue<bool>() == false &&
+    Check(!error && outcome["result"]?["detonemap"]?.GetValue<bool>() == true && outcome["result"]?["alphaRate"]?.GetValue<bool>() == true &&
         outcome["result"]?["blends"]?.AsArray().Count == 5 && order != null && order.Count > 1, "composition reports defaults and the draw order", outcome.ToJsonString());
     (error, outcome, _) = await Tool("composition", new JsonObject { ["detonemap"] = false, ["blends"] = new JsonArray(new JsonObject { ["blend"] = 1, ["destination"] = "OneMinusSrcAlpha" }) });
     Check(!error && outcome["result"]?["detonemap"]?.GetValue<bool>() == false && outcome["result"]?["blends"]?[1]?["destination"]?.GetValue<string>() == "OneMinusSrcAlpha", "composition changes switches and blend factors");

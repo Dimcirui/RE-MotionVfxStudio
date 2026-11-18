@@ -10,8 +10,13 @@ namespace VfxStudio.Re4Render;
 /// <summary>Type* colour header as uploaded by the engine, read from the live 0x2f8 type block
 /// (Polygon3DConstant starts at block+0x54; RE4-EFX-RUNTIME §4.2). Reading it per frame lets
 /// TypeBillboard3DExpression writes reach the picture.</summary>
-public readonly record struct ColorHeader(int Blend, float ColorRate, float Intensity, Vector4 ColorRange, float EdgeBlendRange, float AlphaRate)
+/// <param name="PhysicalAlpha">Header bit 5 = cbUsePhysicalAlphaBlend3D: Physical writes alpha instead of adding.</param>
+public readonly record struct ColorHeader(int Blend, float ColorRate, float Intensity, Vector4 ColorRange, float EdgeBlendRange, float AlphaRate,
+    bool PhysicalAlpha = false)
 {
+    /// <summary>The <see cref="CompositionConfig.Blends"/> slot to draw with: Physical with header bit 5 alpha-blends like 0.</summary>
+    public int BlendState => Blend == 1 && PhysicalAlpha ? 0 : Blend;
+
     /// <param name="document">Source of the header when the type block has no Polygon3DConstant
     /// (Billboard2D): its file values; the preview cannot load Billboard2D expressions anyway.</param>
     public static ColorHeader From(PreviewEntryState state, PreviewDocument? document = null)
@@ -22,12 +27,12 @@ public readonly record struct ColorHeader(int Blend, float ColorRate, float Inte
             var t = document?.Entry.TypeAttribute as EFXAttributeTypeBillboard2D ?? throw new InvalidDataException($"Type {state.Type} needs its file header");
             static float U(int v) => v / 255f;
             return new((int)(t.Flags & 15), t.ColorRate, t.Intensity, new Vector4(U(t.ColorRange.R), U(t.ColorRange.G), U(t.ColorRange.B), U(t.ColorRange.A)),
-                t.EdgeBlendRange, t.AlphaRate);
+                t.EdgeBlendRange, t.AlphaRate, (t.Flags & 0x20) != 0);
         }
         var b = state.TypeBlock;
         return new(state.Blend, FrameDecoder.F32(b, c + 0x10c), FrameDecoder.F32(b, c + 0xec),
             new Vector4(FrameDecoder.F32(b, c + 0xf0), FrameDecoder.F32(b, c + 0xf4), FrameDecoder.F32(b, c + 0xf8), FrameDecoder.F32(b, c + 0xfc)),
-            FrameDecoder.F32(b, c + 0x108), FrameDecoder.F32(b, c + 0xe4));
+            FrameDecoder.F32(b, c + 0x108), FrameDecoder.F32(b, c + 0xe4), FrameDecoder.F32(b, c + 0x110) != 0);
     }
 }
 
@@ -47,11 +52,13 @@ public sealed record RgbWaterSettings(Vector4 SpecularColor, float SpecularInten
 
 /// <summary>Per-entry rendering constants that come from the file (no runtime writer in the CPU path,
 /// except the few *Expression variants, which this preview does not evaluate).</summary>
+/// <param name="Detonemap">ShaderSettings.toggle_re4 == 1: the colour bypasses tone mapping (DetonemapRatio is read only then).</param>
 public sealed record EntryAppearance(
     float SoftParticleDistance, float DepthBias, float DistanceBias, int PriorityBias, float DetonemapRatio,
     Vector4? FadeDepth, FadeAngleSettings? FadeAngle, AlphaCorrectionSettings? AlphaCorrection,
     RgbCommonSettings? RgbCommon, RgbWaterSettings? RgbWater,
-    Vector3? TextureFilter = null, int ParticleLighting = 0, bool FrameBlend = false, DistortionSettings? Distortion = null)
+    Vector3? TextureFilter = null, int ParticleLighting = 0, bool FrameBlend = false, DistortionSettings? Distortion = null,
+    bool Detonemap = false)
 {
     /// <summary>ShaderSettings.ParticleLighting 1-4 and 6 light the particle; 0 and 5 do not (RUNTIME 4.4).</summary>
     public bool Lit => ParticleLighting is not (0 or 5);
@@ -87,7 +94,8 @@ public sealed record EntryAppearance(
             (int)(shader?.ParticleLighting ?? 0),
             uv != null && (uv.Flags & 0x400) != 0,
             distortion == null ? null : new DistortionSettings((int)distortion.DistortionType & 3, distortion.Influence, distortion.SpecularPower,
-                distortion.SpecularIntensity, distortion.SpecularColor.rgba));
+                distortion.SpecularIntensity, distortion.SpecularColor.rgba),
+            shader?.toggle_re4 == 1);
     }
 }
 
@@ -101,9 +109,8 @@ public sealed class CompositionConfig
     public bool SoftParticles { get; set; } = true;
     public bool DepthBias { get; set; } = true;
     public bool Detonemap { get; set; } = true;
-    /// <summary>Multiply alpha by the header's AlphaRate. Off: the value is 0 in most official files,
-    /// so it cannot be a plain alpha factor.</summary>
-    public bool AlphaRate { get; set; }
+    /// <summary>Apply the header's AlphaRate: alpha ×= max(vertex alpha, 1e-6)^AlphaRate (RUNTIME §7.2; 0 = no change).</summary>
+    public bool AlphaRate { get; set; } = true;
     public bool SortEntries { get; set; } = true;
     /// <summary>Approximate EffectDecal decals on the ground (PreviewDecalRenderer).</summary>
     public bool Decals { get; set; } = true;
@@ -116,6 +123,9 @@ public sealed class CompositionConfig
     public bool SortWithinEntry { get; set; }
     /// <summary>Gain K on the lit part of RgbCommon under Physical (RUNTIME §4.9).</summary>
     public float PhysicalGain { get; set; } = 1;
+    /// <summary>Stand-in for the scene's cbEvPow2 in Physical's glow term 37.5·ColorRate·cbEvPow2·lum(texel)²
+    /// (RUNTIME §7.2). The preview has no exposure value; the default is a compromise.</summary>
+    public float PhysicalEvPow2 { get; set; } = 1 / 64f;
     public bool TextureFilter { get; set; } = true;
     public bool TexelChannel { get; set; } = true;
     public bool FrameBlend { get; set; } = true;
@@ -316,7 +326,7 @@ public static class AppearanceReference
         var vrgb = new Vector3(vertex.X, vertex.Y, vertex.Z);
         var trgb = new Vector3(tex.X, tex.Y, tex.Z);
         float alpha = u.Has(EntryUniforms.AlphaCorrectionBit) ? AlphaCorrect(tex.W, vertex.W, acBytes) : tex.W * vertex.W;
-        if (u.Has(EntryUniforms.AlphaRateBit)) alpha *= u.AlphaRate;
+        float alphaRate = u.Has(EntryUniforms.AlphaRateBit) ? MathF.Pow(MathF.Max(vertex.W, 1e-6f), u.AlphaRate) : 1;
         Vector3 rgb;
         if (u.Has(EntryUniforms.RgbCommonBit))
         {
@@ -334,14 +344,22 @@ public static class AppearanceReference
         }
         else if (u.Blend == 3)
         {
-            // EdgeBlend: ColorRate = InnerIntensity, Intensity = OuterIntensity, ColorRange = EdgeOuterColor.
-            float t = Saturate(tex.W / MathF.Max(u.EdgeBlendRange, 1e-4f));
-            var outer = new Vector3(u.ColorRange.X, u.ColorRange.Y, u.ColorRange.Z) * u.Intensity;
-            rgb = Vector3.Lerp(outer, vrgb * u.ColorRate, t) * trgb * L;
+            // EdgeBlend: no texel colour. Inner = vertex colour · ColorRate, edge = ColorRange · Intensity · 100, weighted by
+            // e = (1 − texel alpha)^EdgeBlendRange.
+            float e = MathF.Pow(MathF.Max(1 - tex.W, 0), u.EdgeBlendRange);
+            var outer = new Vector3(u.ColorRange.X, u.ColorRange.Y, u.ColorRange.Z) * (100 * e * u.Intensity * u.ColorRange.W);
+            rgb = (vrgb * (u.ColorRate * (1 - e)) + outer) * L;
+        }
+        else if (u.Blend == 1)
+        {
+            // Physical: glow gain 37.5·ColorRate·EvPow2·lum², on top of the plain texel · vertex colour; soft also scales the colour.
+            float lum = Vector3.Dot(trgb, new Vector3(0.2126f, 0.7152f, 0.0722f));
+            rgb = vrgb * trgb * (37.5f * u.ColorRate * u.PhysicalEvPow2 * lum * lum + 1) * soft * L;
         }
         else rgb = vrgb * trgb * u.ColorRate * L;
-        alpha *= soft;
-        if (u.Blend == 4) return new(Vector3.Lerp(Vector3.One, rgb, alpha), alpha);
+        alpha *= soft * alphaRate;
+        // Multiply: the weight is min(Intensity · vertex alpha · alpha, 1) (MultiplyBlackRate).
+        if (u.Blend == 4) { float w = MathF.Min(u.Intensity * vertex.W * alpha, 1); return new(Vector3.Lerp(Vector3.One, rgb, w), w); }
         if (u.Has(EntryUniforms.DetonemapBit) && u.Detonemap != 0)
         {
             var inv = new Vector3(InverseAces(rgb.X), InverseAces(rgb.Y), InverseAces(rgb.Z)) / MathF.Max(u.Exposure, 1e-4f);

@@ -11,7 +11,7 @@
 | ShaderSettings.DetonemapRatio ≠ 0 | 22451 | 22118 个为 1：作者颜色原样到达屏幕 |
 | 软粒子（Flags 位 2 且距离 > 0） | 20277 | 常见 0.05–1 m |
 | DepthBias ≠ 0 | 17225 | 多为负值（朝相机） |
-| 颜色头 AlphaRate ≠ 1 | 19162 | 16755 个为 0，所以不能当 alpha 系数 |
+| 颜色头 AlphaRate ≠ 1 | 19162 | 16755 个为 0：作为顶点 alpha 的指数，0 = 不变 |
 | FadeByDepth / AlphaCorrection / FadeByAngle | 4843 / 3169 / 1035 | AlphaCorrection 模式 1 有 2446 个，模式 2 有 723 个 |
 | 混合方式 0 / 1 / 2 / 3 / 4 | 16549 / 5890 / 141 / 61 / 502 | |
 | RgbWater / RgbCommon | 182 / 20 | |
@@ -30,18 +30,18 @@
 | 6b | TextureFilter：`t = saturate((a−z)/(y−z))`，`a' = (t²(3−2t)·a)^x` | 片元着色器 | 公式已确认；字段对应推定 |
 | 7 | AlphaCorrection 模式 0–3，字节按引擎截断打包；模式 3 的第 3 字节取粒子生命字节 | 片元着色器 | 公式按规格；CPU 家族部分待确认 |
 | 8 | RgbCommon / RgbWater 替换颜色；lit / unlit 按混合方式合并 | 片元着色器 | 公式按规格；逐粒子随机色和寿命包络未定位，按 u = 0、包络 = 1 处理（折中） |
-| 9 | 混合方式颜色式：0/1/2 为 `顶点RGB·纹素RGB·ColorRate`；3 EdgeBlend 在外缘色 `ColorRange·Intensity` 与 `顶点RGB·ColorRate` 之间按 `纹素A/EdgeBlendRange` 插值；4 Multiply 为 `lerp(1, 顶点RGB·纹素RGB·ColorRate, alpha)` | 片元着色器 | 折中 |
-| 9 | DetonemapRatio：`rgb = lerp(rgb, 逆ACES(rgb)/曝光, ratio)`，经合成的 ACES 后近似还原作者颜色（输入夹在 0.999 以内） | 片元着色器 | 折中 |
+| 9 | 混合方式颜色式与 AlphaRate 按规格 §7.2 的像素着色器（RENDER-HOST §6.2）；Physical 的场景曝光 cbEvPow2 用合成配置的替身值 | 片元着色器 | 公式已确认；EvPow2 折中 |
+| 9 | DetonemapRatio：toggle_re4 = 1 时 `rgb = lerp(rgb, 逆ACES(rgb)/曝光, 比例)`，BlendType 0/1 比例取 DetonemapRatio，2–4 取 1 | 片元着色器 | 开关与比例已确认；逆 ACES 为折中 |
 | — | 软粒子：`alpha × saturate((场景视深 − 片段视深)/SoftParticleDistance)`，乘在最终 alpha 上 | 片元着色器，采样不透明场景深度副本 | 折中 |
 | — | DepthBias：顶点沿视线移动 DepthBias 米后的深度只用于深度测试，屏幕位置不变 | 顶点着色器 | 折中 |
-| 10 | 混合因子：0 `SrcAlpha, 1−SrcAlpha`；1、2 `SrcAlpha, One`；3 同 0；4 `DstColor, Zero` | 管线状态，可在合成配置里改 | 折中 |
+| 10 | 混合因子：0 `SrcAlpha, 1−SrcAlpha`；1、2 `SrcAlpha, One`（1 带头部位 5 时同 0）；3 同 0；4 `DstColor, Zero` | 管线状态，可在合成配置里改 | 折中 |
 | — | 排序：entry 按 PriorityBias 升序，再按（粒子质心到相机距离 + DistanceBias）从远到近；entry 内默认按槽号 | `PreviewSceneRenderer.DrawOrder` | 折中 |
 | — | 受光粒子（ParticleLighting 1–4、6）：RGB（Rgb 层只有 lit 部分）乘预览光照 `环境光 + 主光 × saturate(N·L × 0.5 + 0.5)` | 顶点着色器算光照，片元着色器相乘 | 折中 |
 
 - 颜色头每帧从原生导出的 type block 读取（Polygon3DConstant 起于 block+0x54）：混合方式、ColorRate（0x160）、Intensity（0x140）、ColorRange（0x144）、EdgeBlendRange（0x15c）、AlphaRate（0x138）。这些偏移都与文件值逐项核对过；表达式写入的值会进入画面。
 - ShaderSettings、FadeBy*、AlphaCorrection、Rgb 层取自文件。
 - FadeByAngle 的 ConeDir 按发射器局部方向直接使用。发射器位置取 Transform3D.LocalPosition（预览里发射器世界矩阵为单位阵，见 RENDER-HOST §4.3）。
-- 颜色头的 AlphaRate 默认不参与。语料里它多数为 0，若当 alpha 系数，大部分特效会消失。
+- 颜色头的 AlphaRate 是顶点 alpha 的指数，0 时 alpha 不变（规格 §7.2）。
 - Multiply 同时缩放 bloom 亮度目标；低分辨率粒子层只用于全部 entry 为混合方式 0/1 的场景。
 - Rgb 层常量的“小浮点”量化未实现：哪些常量用 11 位、哪些用 10 位还没确定。
 
