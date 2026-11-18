@@ -169,7 +169,8 @@ public partial class EFXAttributeFakeDoF : ReeLib.Efx.EFXAttribute
 {
     public EFXAttributeFakeDoF() : base(EfxAttributeType.FakeDoF) { }
 
-    public float NearDistance;
+    // 名字取自 MonsterHunterWilds.exe 文本解析器（vtable e0ff6e0）；五个字段由构建器实跑确认逐字原样拷贝。
+    public float Near;
     public float MaxScale;
     public float MinAlpha;
     public uint UsingMipLevel;
@@ -208,6 +209,8 @@ public partial class EFXAttributePlaneCollider : EFXAttribute
 {
 	public EFXAttributePlaneCollider() : base(EfxAttributeType.PlaneCollider) { }
 
+    // MonsterHunterWilds.exe 文本解析器（vtable e102cc0）把 RotationOrder 写进这个字；语料取值（264、650、810 等）
+    // 是位域，所以保留 Flags，RotationOrder 应只占其中几位（哪几位没读）。其余字段名与解析器一致。
     public uint Flags;
 	public Vector3 Position;
     public Vector3 Rotation;
@@ -529,10 +532,17 @@ public partial class EFXAttributeNoise : EFXAttribute
 {
 	public EFXAttributeNoise() : base(EfxAttributeType.Noise) { }
 
-	public via.Range LowFrequency;
-	public via.Range LowFrequencyWidth;
-	public via.Range HighFrequency;
-	public via.Range HighFrequencyWidth;
+	// re4.exe 3dc7050（出生抽取、相位推进）与 3dc6d50（偏移）；MonsterHunterWilds.exe 同式。四个区间对的用法都是
+	// center + spread·k，k ∈ [−1, 1) 每粒子出生时抽一次后固定（docs/development/RE4-EFX-RUNTIME.zh-CN.md §3.8）。
+	// 每帧偏移 = 低频 + 高频两路正弦，加到粒子的独立偏移字段，位置本身不动。
+	// 低频相位的速度，周 / 秒（按 dt 秒推进）。
+	public CenterSpread LowFrequency;
+	// 低频分量的幅度，米。
+	public CenterSpread LowFrequencyWidth;
+	// 高频相位的速度，周 / 秒。
+	public CenterSpread HighFrequency;
+	// 高频分量的幅度，米。
+	public CenterSpread HighFrequencyWidth;
 
 }
 
@@ -590,7 +600,8 @@ public partial class EFXAttributeTexelChannelOperator : EFXAttribute
 	public float Desaturate;
 	public float AmbientColorIntensity;
 	public float EmissiveRate;
-	public float EmissivePower;
+	// 引擎名（re4.exe 与 MonsterHunterWilds.exe 的文本解析器）是 EmissionPower。
+	public float EmissionPower;
 	public float Opacity;
 	public float HueIntensityCurve;
 	public uint UseIntEnvelope;
@@ -933,9 +944,10 @@ public partial class EFXAttributeRepeatArea : EFXAttribute
 {
 	public EFXAttributeRepeatArea() : base(EfxAttributeType.RepeatArea) { }
 
+	// 名字取自 MonsterHunterWilds.exe 文本解析器（vtable e106ba0）。
 	public uint Flags;
-	public Vector3 Area;
-	public float Unkn;
+	public Vector3 Size;
+	public float FadeoutStart;
 }
 
 [RszGenerate, RszAutoReadWrite, RszVersionedObject(typeof(EfxVersion)), EfxStruct(EfxAttributeType.Listener, EfxVersion.MHWilds)]

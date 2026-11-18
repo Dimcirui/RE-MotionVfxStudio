@@ -13,7 +13,9 @@ python -I -X utf8 -u exp_emitter.py run bb_60               # 一个发射器场
 python -I -X utf8 -u pe_image.py "<re4.exe>" 3d1d830 80     # 反汇编一个 RVA
 ```
 
-依赖 numpy；`scan_loops.py` 与 `pe_image.py` 另需 pefile、capstone。exe 路径可用环境变量 `RE4_EXE` 覆盖。
+依赖 numpy；`scan_loops.py` 与 `pe_image.py` 另需 pefile、capstone。exe 路径可用环境变量 `RE4_EXE`（Wilds 为 `MHWILDS_EXE`）覆盖。
+
+接入新游戏：在 `games/` 加一个版本配置，再写一个像 `mhwildsnative.py` 那样的绑定，放这个游戏的代码在映射后还缺的东西（分配器、单例）。`emitter.py`、`world.py`、`factory.py`、`re4host.py` 里的地址只属于 RE4；Wilds 的发射器驱动在 `mhwilds_emitter.py`，两边对应的函数见 [WILDS-EFX-VS-RE4.zh-CN.md](../../docs/development/WILDS-EFX-VS-RE4.zh-CN.md) §6.4。静态 TLS 与加载器读取流（`install_static_tls`、`ReadStream`）在 `native_core.py`，两个游戏共用。
 `run_all.py` 让每个实验在独立子进程中运行：fast fail（0xC0000409）或未捕获的访问违例只结束该子进程，
 汇总里记为 `CRASH`。
 
@@ -27,11 +29,24 @@ python -I -X utf8 -u pe_image.py "<re4.exe>" 3d1d830 80     # 反汇编一个 RV
 
 | 文件 | 内容 |
 |---|---|
-| `re4native.py` | 映射与调用框架：按节复制（不重定位、不运行入口点与 TLS 回调）；kernel32 / MSVC 运行库 / UCRT 导入按名绑定，其余导入指向不可访问的陷阱槽，调用时抛 `UnresolvedImportCalled`（带导入名）；向量化异常处理把访问违例变成 `NativeFault`（故障 RVA、访问地址、exe 内回溯）；`install_settings` 伪造特效设置单例；`Emitter` 提供 E 与 ctx+0x118 |
+| `native_core.py` | 与游戏无关的映射与调用框架：按节复制（不重定位、不运行入口点与 TLS 回调）；kernel32 / MSVC 运行库 / UCRT 导入按名绑定，其余导入指向不可访问的陷阱槽，调用时抛 `UnresolvedImportCalled`（带导入名）；向量化异常处理把访问违例变成 `NativeFault`（故障 RVA、访问地址、exe 内回溯）；`patch_jump`、`install_bump_allocator`、`install_global` 替换引擎分配器和单例。只认 `games/` 里登记的 exe 版本，一个进程只能映射一个 exe |
+| `games/` | 每个游戏一个版本配置：游戏 id（与 `GameProfile.cs` 相同）、EFX 版本、默认 exe 路径与覆盖用的环境变量、文件大小、PE 时间戳。`re4.py`：`RE4_EXE`；`mhwilds.py`：`MHWILDS_EXE`，默认 `~\Downloads\MonsterHunterWilds.exe` |
+| `re4native.py` | RE4 绑定：`load()` 只映射 RE4 的版本；`install_settings` 伪造特效设置单例；`Emitter` 提供 E 与 ctx+0x118。实验和 `re4host.py` 都以 `rn` 导入它 |
+| `mhwildsnative.py` | Wilds 绑定：`load()` 映射 Wilds 的版本并把分配器 b020830 / f5b0 换成 bump 分配器；工厂表、步骤表的地址。地址出处见 [WILDS-EFX-VS-RE4.zh-CN.md](../../docs/development/WILDS-EFX-VS-RE4.zh-CN.md) |
+| `mhwilds_emitter.py` | Wilds 的发射器驱动，对应 `emitter.py`：工厂表从静态初始化代码读出；`Entry` 用各类型自己的加载器读条目并组成描述对象 X；`Emitter` 由 1dec20 登记步骤、aaba300 构造 E、1c1c0 推进（rcx = X）。单例、字节补丁、桩函数与 RE4 的对应见文件开头 |
+| `exp_wilds_emitter.py` | Wilds 语料条目上的发射器场景：步骤列表、槽数、逐帧存活数、执行过的步骤；`sweep <entries.json>` 批量跑 |
+| `exp_wilds_reference.py` | Wilds 粒子数值对照 RE4 规格与 `refsim.py`：出生时刻与 E.state、Life、积分、出生位置、出生速度、Billboard3D、出生颜色、ScaleAnim、RotateAnim、UV 帧推进与 UVSequenceModifier、Rgb* 寿命、Noise，以及含均分模式与 Box 的出生位置 |
+| `noise_ref.py` | 从 re4.exe 3dc7050 / 3dc6d50 读出的 Noise 参考实现（出生抽取、每帧偏移、相位推进） |
+| `equidistant_ref.py` | 从 re4.exe 读出的等距圆柱参考实现：建表 3d23470（64 点弦长 + 10 次二分）、查表 3d20e20、取点 3d22030 |
 | `refsim.py` | 规格 §1.6 的参考随机数（种子、xorshift32、CenterSpread、ScaleAnim 与 Blink 的抽取顺序） |
 | `exp_map.py` | 映射、导入绑定、故障与陷阱的捕获 |
 | `exp_scaleanim.py` | ScaleAnim 闭式函数 3cfd420 与逐粒子步 3d1d830 + 基值捕获 3d1dd00 |
 | `exp_blink.py` | Blink 3dc7a20 |
+| `exp_noise.py` | Noise 3dc7050 对照 `noise_ref.py`（RE4 语料中唯一带 Noise 的 Billboard3D 条目，逐帧偏移与逐粒子记录） |
+| `exp_spread.py` | Velocity3D Spread 3d1a470：RE4 语料全部 12 个 CPU 条目的出生速度 |
+| `exp_particle_interval.py` | Spawn ParticleInterval 的槽位分组（3d15e60），改写商 q 后逐帧比对存活槽位 |
+| `exp_rotation_correct.py` | EmitterShape3D RotationCorrect 1、2（伪造相机）；3、4 只报告 |
+| `exp_equidistant.py` | 等距圆柱对照 `equidistant_ref.py`（RE4 语料中唯一的等距条目 csa071 smoke：引擎的表逐项、出生位置） |
 | `exp_loader.py` | 引擎自己的构造函数 → 加载器（槽 5）→ 块构建器（槽 15），输入为语料 .efx 的原始字节 |
 | `exp_rng.py` | 两个播种函数与 ScaleAnim / Blink 出生抽取对照 `refsim.py` |
 | `exp_pipeline.py` | 整个逐粒子管线 3d05350，ctx 中只挂 ScaleAnim 与 Blink |

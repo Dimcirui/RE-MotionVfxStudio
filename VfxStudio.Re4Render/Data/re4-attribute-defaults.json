@@ -199,7 +199,7 @@
     "FadeByOcclusion": {
       "samples": 19,
       "fields": {
-        "Radius": "1",
+        "CullingRadius": "1",
         "MinSize": "0.2"
       }
     },
@@ -320,14 +320,14 @@
     "Noise": {
       "samples": 48,
       "fields": {
-        "LowFrequency.s": "0.6",
-        "LowFrequency.r": "0.1",
-        "LowFrequencyWidth.s": "0.3",
-        "LowFrequencyWidth.r": "0.1",
-        "HighFrequency.s": "0.5",
-        "HighFrequency.r": "0.2",
-        "HighFrequencyWidth.s": "0.1",
-        "HighFrequencyWidth.r": "0.05"
+        "LowFrequency.center": "0.6",
+        "LowFrequency.spread": "0.1",
+        "LowFrequencyWidth.center": "0.3",
+        "LowFrequencyWidth.spread": "0.1",
+        "HighFrequency.center": "0.5",
+        "HighFrequency.spread": "0.2",
+        "HighFrequencyWidth.center": "0.1",
+        "HighFrequencyWidth.spread": "0.05"
       }
     },
     "NoiseExpression": {
@@ -459,16 +459,16 @@
     "PtTransform2D": {
       "samples": 2,
       "fields": {
-        "unkn3": "1",
-        "unkn4": "1"
+        "LocalScale.X": "1",
+        "LocalScale.Y": "1"
       }
     },
     "PtTransform3D": {
       "samples": 2,
       "fields": {
-        "scale.X": "1",
-        "scale.Y": "1",
-        "scale.Z": "1"
+        "LocalScale.X": "1",
+        "LocalScale.Y": "1",
+        "LocalScale.Z": "1"
       }
     },
     "PtTransform3DClip": {
@@ -496,9 +496,9 @@
     "PtVelocity3D": {
       "samples": 1500,
       "fields": {
-        "unkn1_0": "1",
-        "unkn1_2": "1",
-        "unkn1_3": "0.120000005"
+        "Direction.X": "1",
+        "Direction.Z": "1",
+        "Speed": "0.120000005"
       }
     },
     "PtVortexelWind": {
@@ -704,7 +704,7 @@
         "ShadeColor.B": "255",
         "ShadeColor.A": "255",
         "EmissiveRate": "4",
-        "EmissivePower": "2",
+        "EmissionPower": "2",
         "Opacity": "1",
         "HueIntensityCurve": "1",
         "Keep.s": "100",
@@ -1627,7 +1627,7 @@
         "Size.X": "2",
         "Size.Y": "2",
         "Size.Z": "2",
-        "DrawDistance": "-1"
+        "Distance": "-1"
       }
     },
     "UnknownRE4_197": {
@@ -1665,9 +1665,9 @@
         "Parameter.Y": "1",
         "Lacunarity": "3",
         "Gain": "0.5",
-        "Blend": "0.5",
-        "lfoRange": "3",
-        "lfoTime": "10",
+        "VelocityBlend": "0.5",
+        "OscillationRange": "3",
+        "OscillationTime": "10",
         "Scale.X": "1",
         "Scale.Y": "1",
         "Scale.Z": "1",
@@ -1701,10 +1701,10 @@
     "Velocity2D": {
       "samples": 78,
       "fields": {
-        "unkn1_2": "1",
-        "unkn1_4": "0.95",
-        "unkn2_0": "1",
-        "unkn2_1": "1"
+        "Speed.s": "1",
+        "SpeedCoef.s": "0.95",
+        "SizeX": "1",
+        "SizeY": "1"
       }
     },
     "Velocity2DExpression": {
