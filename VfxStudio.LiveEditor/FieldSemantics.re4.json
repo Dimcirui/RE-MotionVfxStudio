@@ -191,13 +191,13 @@
     "ShaderSettings": {
       "SoftParticleDistance": { "help": "软粒子过渡深度；只在 Flags 位 2 时生效。", "unit": "米" },
       "ParticleLighting": {
-        "help": "0 不受光；1–4 受光，逐粒子光照分辨率 1/2/4/8；5 当 0 分配；6 当 1。",
-        "status": "1–6 各档的确切含义",
+        "help": "0 不受光；1–4 受光，每粒子光照图集 1×1 / 2×2 / 4×4 / 8×8，低光照画质时 2–4 按 1×1；5 不分配光照图集；6 图集 1×1。",
+        "status": "5 的光照效果",
         "bits": { "summary": "粒子受光（取值）", "groups": [
-          { "shift": 0, "width": 32, "label": "受光", "options": [ "不受光", "受光 n=1", "受光 n=2", "受光 n=4", "受光 n=8", "按 0 分配", "按 n=1" ] }
+          { "shift": 0, "width": 32, "label": "受光", "options": [ "不受光", "受光 1×1", "受光 2×2", "受光 4×4", "受光 8×8", "不分配图集", "图集 1×1" ] }
         ] }
       },
-      "DistanceBias": { "help": "排序距离偏移，负值视为更近。", "unit": "米", "status": "单位" },
+      "DistanceBias": { "help": "排序距离偏移，负值视为更近。", "unit": "米", "status": "单位与正负方向" },
       "PriorityBias": { "help": "整数绘制优先级偏移。" },
       "DepthBias": { "help": "深度偏移，负值朝向相机。" },
       "Flags": {
@@ -211,7 +211,11 @@
           { "shift": 16, "width": 1, "label": "位 16：每粒子光照缓冲" }
         ] }
       },
-      "ShadowColor": { "help": "阴影颜色，只用 RGB。", "status": "作用范围" },
+      "ShadowColor": { "help": "阴影颜色，只用 RGB。体积散射着色时，粒子颜色按密度向这个颜色混合。", "status": "其他着色路径" },
+      "unkn13": { "help": "1 = 颜色不乘强度缩放，改按 DetonemapRatio 混合。只看最低位。", "status": "完整视觉效果" },
+      "toggle_re4": { "help": "1 = 打开；其他值等于关闭。", "status": "作用未知" },
+      "DeinterlaceDistance": { "help": "交错或低分辨率绘制的距离阈值。", "status": "作用" },
+      "unkn24": { "help": "逐粒子方向的计算方式。0 不用；1 每帧按位置算；2 只在出生时算；3 每帧算并按 EmitterShape3D 的轴校正；4 出生时算并校正。" },
       "ScatteringMode": { "help": "0 = 不用散射参数（RayleighCoeff…DensityMin 被忽略）；RE4 从不打开。" },
       "DensityMax": { "help": "百分数，运行时 ×0.01。" },
       "DensityMin": { "help": "百分数，运行时 ×0.01。" },
@@ -224,11 +228,11 @@
       "DetonemapRatio": { "help": "颜色绕过色调映射的比例：1 = 按作者颜色到达屏幕，0 = 普通色调映射。不是亮度倍数。" },
       "SSRAlphaThreshold": { "help": "alpha 超过此值写入屏幕空间反射；0 = 不写。" },
       "StencilTarget": { "help": "只读低字节；Flags 位 13 打开时生效。" },
-      "ParticleShadingRate": { "help": "可变速率着色，只用低 3 位；255 = 默认。" },
-      "LightingShadingRate": { "help": "可变速率着色，只用低 3 位；255 = 默认。" },
-      "ShadowShadingRate": { "help": "可变速率着色，只用低 3 位；255 = 默认。" },
-      "ZPrepassShadingRate": { "help": "可变速率着色，只用低 3 位；255 = 默认。" },
-      "StochasticShadingRate": { "help": "可变速率着色，只用低 3 位；255 = 默认。" }
+      "ParticleShadingRate": { "help": "可变速率着色：多少个像素共用一次着色。只用低 3 位，255 = 默认。", "bits": { "summary": "着色速率", "groups": [ { "shift": 0, "width": 3, "label": "速率", "options": [ "1×1", "1×2", "2×1", "2×2", "2×4", "4×2", "4×4", "默认" ] } ] } },
+      "LightingShadingRate": { "help": "可变速率着色：多少个像素共用一次着色。只用低 3 位，255 = 默认。", "bits": { "summary": "着色速率", "groups": [ { "shift": 0, "width": 3, "label": "速率", "options": [ "1×1", "1×2", "2×1", "2×2", "2×4", "4×2", "4×4", "默认" ] } ] } },
+      "ShadowShadingRate": { "help": "可变速率着色：多少个像素共用一次着色。只用低 3 位，255 = 默认。", "bits": { "summary": "着色速率", "groups": [ { "shift": 0, "width": 3, "label": "速率", "options": [ "1×1", "1×2", "2×1", "2×2", "2×4", "4×2", "4×4", "默认" ] } ] } },
+      "ZPrepassShadingRate": { "help": "可变速率着色：多少个像素共用一次着色。只用低 3 位，255 = 默认。", "bits": { "summary": "着色速率", "groups": [ { "shift": 0, "width": 3, "label": "速率", "options": [ "1×1", "1×2", "2×1", "2×2", "2×4", "4×2", "4×4", "默认" ] } ] } },
+      "StochasticShadingRate": { "help": "可变速率着色：多少个像素共用一次着色。只用低 3 位，255 = 默认。", "bits": { "summary": "着色速率", "groups": [ { "shift": 0, "width": 3, "label": "速率", "options": [ "1×1", "1×2", "2×1", "2×2", "2×4", "4×2", "4×4", "默认" ] } ] } }
     },
     "AlphaCorrection": {
       "Flags": {

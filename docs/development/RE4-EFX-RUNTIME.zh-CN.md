@@ -1096,28 +1096,28 @@ GPU 类型的出生、运动、动画都在计算着色器里完成；CPU 只把
 | 字段 | 运行时含义 | 状态 | 依据 |
 |---|---|---|---|
 | `SoftParticleDistance` | 软粒子过渡深度（米），仅 `Flags` 位 2 时生效（否则 0）→ 着色器 softParticleDist | 已确认 | SS；语料位 2 在 36748/36824 |
-| `ParticleLighting` | 0 不受光；1..4 受光，光照分辨率 n = 1/2/4/8（每粒子 n² 图集）；5 当 0 分配；6 当 n=1；低画质选项把 2..4 压到 1 | 门控已确认，取值名部分待确认 | SS |
-| `DistanceBias` | 排序距离偏移（米，负值视为更近） | 部分待确认（单位推定） | SS |
+| `ParticleLighting` | 0 不受光；1..4 受光，逐粒子光照图集每粒子 1×1 / 2×2 / 4×4 / 8×8；低画质选项把 2..4 压到 1。5 不分配独立图集（图集尺寸 0，同 0），最终由哪个光照 pass 消费未读；6 图集 1×1 | 1..4 已确认；5 部分待确认 | SS；图集尺寸函数在 RE4 与 MHWilds 一致。语料 RE4：5 ×3、6 ×12；MHWilds：5 ×19541（28.9%），全部置 Flags 位 7，18658 条置位 9，19515 条置位 10；无 6 |
+| `DistanceBias` | 排序距离偏移；浮点原样进入渲染状态，再复制进绘制记录。单位（米）与“负值视为更近”是推定 | 部分待确认（排序键算法未读） | SS；MHWilds 0x1D3230 → 0xB05CE30 → 0xB0D468F |
 | `PriorityBias` | 整数绘制优先级偏移 | 已确认 | SS |
 | `DepthBias` | 深度偏移（负值朝向相机）→ 着色器 depthBias | 已确认 | SS |
 | `Flags` | 位 2 启用软粒子；位 13 启用 StencilTarget；位 16 每粒子光照缓冲；位 9、10 光照相关渲染标志；位 11 恒置 | 位 2、13 已确认 | SS |
-| `ShadowColor` | RGB 乘进受光 / 体积粒子的阴影部分（alpha 忽略） | 部分待确认 | SS |
+| `ShadowColor` | RGB ÷ 255 上传为 cbShadowColor，alpha 不上传。像素着色器的 Mie 散射分支按 `lerp(LitRGB, ShadowColor.rgb, t)` 混向阴影色，`t` 由密度相关量算出并夹到 [0, 1] | 已确认（Mie 散射分支）；其余分支未读 | SS；两代都读到使用 cbShadowColor 的像素着色器（MHWilds `primitiveVfx_Billboard3DLighting.vsdf` 块 0x699F1）。语料非黑：RE4 45 条（白 6、`FF050514` 39），MHWilds 32 条全为白 |
 | `RayleighCoeff`、`MieCoeff`、`MieShadowRatio` | 仅 ScatteringMode ≠ 0 时读取，否则用默认 0.15 / 0.15 / 0.2；RE4 从不开启 | 已确认 | SS |
 | `MieDropoff`、`AlphaScale`、`DensityScale`、`DensityMax`、`DensityMin`、`VolumeDepth`、`VolumetricIntensityBlend` | 体积参数；Density* 为百分数（×0.01） | 已确认（去向） | SS |
-| `unkn13` | 只读位 0 → 发射器标志 `+0x168` 位 13，含义未知 | 部分待确认 | SS |
+| `unkn13` | 只读位 0 → 发射器标志 `+0x168` 位 13 → cbEffect3DFlags 位 10。置位时 primitivevfx 像素着色器跳过 cbIntensityScale 乘数，改走受 cbDetonemapRate 控制的颜色混合 | 部分待确认（只核对了 primitivevfx 像素分支） | SS；CPU 3d26236、3d264be，DXBC 块 0x78DE1。RE4 置位 750 条，MHWilds 全为 0 |
 | `ScatteringMode` | 0 关、1..6 | 门控已确认 | SS |
 | `LightShadowRatio` | 阴影使受光粒子变暗的程度 → cbLightShadowRatio | 已确认 | SS |
 | `BackfaceLightRatio` | 背光透射；运行时 = 文件值 × 8 | 已确认 | SS |
 | `LightingOffsetX/Y/Z`、`LightingVelocityOffset` | 光照采样点偏移 / 沿速度的偏移 | 已确认（去向） | SS |
 | `InShadowDelay`、`TimeToFullShadow`、`OutShadowDelay`、`TimeToNoShadow` | 进出阴影的过渡时间，**毫秒** | 已确认 | SS |
-| `toggle_re4` | 按 `== 1` 读成布尔 → 发射器 `+0x168` 位 22，含义未知 | 部分待确认 | SS |
+| `toggle_re4` | 按 `== 1` 读成布尔 → 发射器 `+0x168` 位 22（写入 3d2625a），读取方与视觉作用未知。MHWilds 布局没有这个字 | 部分待确认 | SS；RE4 开启 889 条 |
 | `DetonemapRatio` | 反色调映射比例：1 = 颜色按作者值到达屏幕，0 = 普通色调映射；不是亮度倍数 | 已确认 | SS → shader detonemapRate |
-| `DeinterlaceDistance` | 半分辨率 / 交错渲染距离阈值 | 部分待确认 | SS |
+| `DeinterlaceDistance` | 进入运行时块（MHWilds：文件 +0x80，以 SoftParticleDistance 为 +0，经块构建器 0x1D60A1 写进块 +0x90；文本键 `DeinterlaceDistance` 在 0xADB3CDF 写同一槽）。何时切换交错或低分辨率绘制未读 | 去向已确认，作用待确认 | SS；RE4 5 ×35563、20 ×1261；MHWilds 全为 5 |
 | `AlphaCoverage` | 随机透明覆盖缩放 | 已确认（去向） | SS |
 | `SSRAlphaThreshold` | alpha 超过此值写入屏幕空间反射；0 = 不写 | 已确认 | SS |
 | `StencilTarget` | 只读低字节，需 Flags 位 13 | 已确认 | SS |
-| `unkn24` | ≠ 0 时向实例写一个逐粒子 dword | 部分待确认 | SS |
-| `*ShadingRate` ×5 | 可变速率着色，低 3 位，7 / 255 = 默认 | 已确认 | SS |
+| `unkn24` | 3d28480 用粒子位置和发射器变换生成打包的逐粒子方向向量（一个 dword）：1、3 每次调用时刷新，2、4 只在出生时写；3、4 另用 EmitterShape3D 的轴校正方向；0 不写 | RE4 已确认；MHWilds 四档是否相同待确认 | SS；RE4 语料全为 0；MHWilds 1/2/3/4 = 208/6/433/105，同样上传这个 dword |
+| `*ShadingRate` ×5 | 可变速率着色，低 3 位：0..6 = 1×1、1×2、2×1、2×2、2×4、4×2、4×4，7 = 默认（文件写 255）。这是引擎文本解析器的编号，不是 D3D12_SHADING_RATE 的编码。MHWilds 合成一个 u16 `ShadingRates`：从低位起每 3 位依次为 Particle、Lighting、Shadow、ZPrepass、Stochastic，渲染状态函数 0xB05CFE0 逐档解包，7 取默认 | 已确认 | SS；RE4 3d26070、MHWilds 0xADB3E20 同一套编号。RE4 36824 条全为 255；MHWilds 0x7FFF ×67553（全默认）、0x7FFB ×86（Particle 2×2）、0x7FDB ×2（Particle、Lighting 2×2，见 11_em0100_51_006 / 11_em0100_51_701 的 E1） |
 
 ShaderSettings 不改变 CPU 模拟；离线预览器只需处理软粒子、深度偏移与 DetonemapRatio。没有雾相关字段。
 

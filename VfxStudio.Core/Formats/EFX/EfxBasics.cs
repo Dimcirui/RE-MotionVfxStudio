@@ -379,11 +379,12 @@ public partial class EFXAttributeShaderSettings : EFXAttribute
 	// 每发射器更新 3d281e0）。没有引擎名的字段按作用起名并注明。语义只在 RE4 上核对过。
 	// 软粒子距离（米，旧名 Saturation）；只在 Flags 位 2 置位时生效。
 	public float SoftParticleDistance;
-	// 无引擎名（旧名 unkn2）：0 = 不受光，1–4 = 受光、逐粒子光照分辨率 1/2/4/8（门控已证实，档位含义为推测；
-	// 低光照画质时 2–4 被压成 1）。对应 MHWI 的 particleLighting。
+	// 无引擎名（旧名 unkn2）：0 = 不受光；1–4 = 受光，逐粒子光照图集每粒子 1×1 / 2×2 / 4×4 / 8×8
+	// （低光照画质时 2–4 被压成 1）；5 = 不分配独立图集，由哪个光照 pass 消费未知；6 = 图集 1×1（只有 RE4）。
+	// 对应 MHWI 的 particleLighting。
 	public uint ParticleLighting;
     [RszVersion(EfxVersion.RE8, EndAt = nameof(PriorityBias))]
-	// 排序距离偏移（旧名 re8_unkn1）。
+	// 排序距离偏移（旧名 re8_unkn1）。浮点原样进入绘制记录，排序键的算法未读。
 	public float DistanceBias;
 	// 排序优先级偏移（旧名 re8_unkn2；exe 按整数读，旧代码按 float）。
 	public int PriorityBias;
@@ -398,7 +399,8 @@ public partial class EFXAttributeShaderSettings : EFXAttribute
     [RszVersion(EfxVersion.RE8)]
 	public uint Flags;
 
-	// 阴影颜色，只用 RGB（旧名 color0）。
+	// 阴影颜色（旧名 color0）：RGB ÷ 255 上传为 cbShadowColor，alpha 不上传。像素着色器的 Mie 散射分支按
+	// lerp(受光 RGB, ShadowColor.rgb, t) 混向阴影色，t 由密度相关量算出并夹到 [0, 1]。
 	public via.Color ShadowColor;
 	// 体积散射块（旧名 unkn6..12）：ScatteringMode = 0 时引擎忽略这些值、改用默认 0.15 / 0.15 / 0.2；RE4 从不打开。
 	public float RayleighCoeff;
@@ -409,13 +411,18 @@ public partial class EFXAttributeShaderSettings : EFXAttribute
 	// 百分比，运行时 ×0.01。
 	public float DensityMax;
 	public float DensityMin;
-	// 只用位 0，写入发射器标志位 13（含义未追）。
+	// 只用位 0：发射器标志位 13 → cbEffect3DFlags 位 10。置位时像素着色器不乘 cbIntensityScale，
+	// 改走受 cbDetonemapRate 控制的颜色混合。
 	public uint unkn13;
 	// 无引擎名（旧名 unkn14）：0 = 不用散射参数。
 	public uint ScatteringMode;
 	// 受光块（旧名 unkn15、unkn16、unkn17）。BackfaceLightRatio 运行时 ×8。
 	public float LightShadowRatio;
 	public float BackfaceLightRatio;
+	// MHWilds 起新增。MHWilds 这一段（LightingGrayscaleRatio .. SSRAlphaThreshold）的顺序由 MonsterHunterWilds.exe
+	// 构建器（vtable e0fdc90，slot 16）在语料字节上实跑确定：每个字换成标记值，看它落到块里哪个解析器名的位置。
+	[RszVersion(EfxVersion.MHWilds)]
+	public float LightingGrayscaleRatio;
 	[RszVersion(EfxVersion.RE2)]
 	public float MieShadowRatio;
 
@@ -425,8 +432,8 @@ public partial class EFXAttributeShaderSettings : EFXAttribute
 	public float LightingOffsetY;
 	public float LightingOffsetZ;
 
-	// 旧名 unkn19；exe 按 float 读（旧代码按 uint）。
-    [RszVersion('<', EfxVersion.DD2)]
+	// 旧名 unkn19；exe 按 float 读（旧代码按 uint）。DD2 没有；MHWilds 又有（exe 构建器实跑确认）。
+    [RszVersion(nameof(Version), "<", EfxVersion.DD2, "||", nameof(Version), ">=", EfxVersion.MHWilds)]
 	public float LightingVelocityOffset;
 
 	// 进出阴影的过渡时间，毫秒（旧名 sb_unkn2..5）。
@@ -436,29 +443,31 @@ public partial class EFXAttributeShaderSettings : EFXAttribute
 	public float OutShadowDelay;
 	public float TimeToNoShadow;
 
-	// 引擎按 "== 1" 判断（值 2 等于关闭），含义未追。
+	// 引擎按 "== 1" 判断（值 2 等于关闭），置位发射器 +0x168 位 22；读取方与作用未知。
     [RszVersionExact(EfxVersion.RE4)]
 	public uint toggle_re4;
+	// MHWilds：exe 构建器不读这个字。
     [RszVersion(EfxVersion.DD2)]
 	public float dd2_unkn1;
 	// 着色器 detonemapRate：粒子颜色绕过色调映射的比例（旧名 ColorBrightness，**不是亮度**）。
     [RszVersion(EfxVersion.RE2)]
 	public float DetonemapRatio;
 
-    [RszVersion(EfxVersion.DD2)] public uint toggle_dd2;
+    [RszVersion(nameof(Version), ">=", EfxVersion.DD2, "&&", nameof(Version), "<", EfxVersion.MHWilds)] public uint toggle_dd2;
     [RszVersion(EfxVersion.RE3, EndAt = nameof(StochasticShadingRate))]
 	public float VolumeDepth;
 
 	// 旧名 sb_unkn9..12；AlphaCoverage、SSRAlphaThreshold 与着色器常量名对得上。
+	// DeinterlaceDistance 进入运行时块（MHWilds 块 +0x90），何时切换交错或低分辨率绘制未知。
     [RszVersion(">", EfxVersion.RERT, EndAt = nameof(SSRAlphaThreshold))]
 	public float VolumetricIntensityBlend;
 	public float DeinterlaceDistance;
 	public float AlphaCoverage;
 	public float SSRAlphaThreshold;
 
-    [RszVersion(EfxVersion.DD2)]
+    [RszVersion(nameof(Version), ">=", EfxVersion.DD2, "&&", nameof(Version), "<", EfxVersion.MHWilds)]
 	public float dd2_unkn2;
-	// 只用低字节；Flags 位 13 打开时生效（旧名 unkn22）。
+	// 只用低字节；Flags 位 13 打开时生效（旧名 unkn22；MHWilds 实跑确认同样受位 13 控制）。
 	public uint StencilTarget;
 
     [RszVersionExact(EfxVersion.RE8, EndAt = nameof(re8_unkn5))]
@@ -466,11 +475,14 @@ public partial class EFXAttributeShaderSettings : EFXAttribute
 	public float re8_unkn4;
 	public float re8_unkn5;
 
-	// 含义未追。
+	// 逐粒子方向向量的生成方式（RE4 3d28480，由粒子位置和发射器变换算出，打包成一个 dword 上传）：
+	// 0 = 不写；1、3 = 每次更新刷新；2、4 = 只在出生时写；3、4 另用 EmitterShape3D 的轴校正方向。
+	// MHWilds 也上传这个 dword，四档算法是否与 RE4 相同未读。
     [RszVersion(EfxVersion.RE8)]
 	public uint unkn24;
 
-	// 可变速率着色（旧名 unkn25..29）：只用低 3 位，255 = 默认。
+	// 可变速率着色（旧名 unkn25..29）：只用低 3 位，0–6 = 1×1、1×2、2×1、2×2、2×4、4×2、4×4（引擎编号，
+	// 不是 D3D12_SHADING_RATE 的编码），7 = 默认；文件写 255。
     [RszVersion(nameof(Version), ">=", EfxVersion.RERT, "&&", nameof(Version), "<", EfxVersion.MHWilds, EndAt = nameof(StochasticShadingRate))]
 	public uint ParticleShadingRate;
 	public uint LightingShadingRate;
@@ -478,9 +490,11 @@ public partial class EFXAttributeShaderSettings : EFXAttribute
 	public uint ZPrepassShadingRate;
 	public uint StochasticShadingRate;
 
-	[RszVersion(EfxVersion.MHWilds, EndAt = nameof(mhws_unkn_short))] public float mhws_unkn1;
+	// MHWilds：mhws_unkn1 / 2 exe 构建器不读。ShadingRates 把五个 *ShadingRate 打包进一个 u16：从低位起每 3 位依次是
+	// Particle、Lighting、Shadow、ZPrepass、Stochastic，编号同上，7 = 默认。0x7fff = 全部默认，0x7ffb = Particle 2×2。
+	[RszVersion(EfxVersion.MHWilds, EndAt = nameof(ShadingRates))] public float mhws_unkn1;
 	public float mhws_unkn2;
-	public short mhws_unkn_short;
+	public short ShadingRates;
 }
 
 [RszGenerate, RszAutoReadWrite, RszVersionedObject(typeof(EfxVersion)), EfxStruct(EfxAttributeType.ShaderSettingsExpression, EfxVersion.DMC5, EfxVersion.RE8, EfxVersion.RERT, EfxVersion.DD2)]
