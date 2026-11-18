@@ -569,7 +569,7 @@ RE4 文件里没有 TrySpawnAllParticles、InitializeFull、SpawnChanceFrame、O
 | `RangeDivideHorizontalNum`、`RangeDivideVerticalNum` | u32 | 只有 Sphere、Cylinder 读：把随机的 a、b 换成按块计数的均分位置（3d231b0，见下方采样） | 已确认 | 3d231b0 及调用处 3d22854、3d22b44、3d22da2 |
 | `LocalRotation` | Vector3，弧度 | 形状旋转 R = euler(LocalRotation, RotationOrder)，每帧重建（3d242d0），同时保存 R⁻¹ | 已确认 | SEM |
 | `RotationOrder` | 同 Transform3D | | 已确认 | SEM |
-| `RotationCorrect` | 枚举 | 形状旋转按相机修正（3d21210，结果在形状块 +0x40）。1 ParallelCamera：R = 相机矩阵（3a17660）3×3 的转置；2 ParallelCameraAxisY：z = normalize(C[0][2], 0, C[2][2])，R = ((z.z, 0, −z.x), (0, 1, 0), z)，只保留偏航；3 ToCamera / 4 ToCameraAxisY：用相机位置（3a17ad0 第 4 行）减发射器位置与相机上方向拼出朝向相机的基，只在每帧的 slot 23（3d24710）里求 | 1、2 已确认；3、4 部分待确认（每帧路径未在原生运行中执行） | 3d21210、3d24710；Re4Native `exp_rotation_correct.py`（伪造相机，两组相机） |
+| `RotationCorrect` | 枚举 | 形状旋转按相机修正（3d21210，结果在形状块 +0x40）：R = L · B，L 为 LocalRotation 的旋转矩阵，B 为相机基。C 为相机矩阵（行：右、上、前、位置）。1 ParallelCamera：B = C 的 3×3 转置（C 取自 3a17660）；2 ParallelCameraAxisY：z = normalize(C[0][2], 0, C[2][2])，B = ((z.z, 0, −z.x), (0, 1, 0), z)，只保留偏航；3 ToCamera：d = C[3] − 发射器位置（C 取自 3a17ad0），z = normalize(d)，x = normalize(C[1] × d)，B = (x, z × x, z)；4 ToCameraAxisY：z = normalize(d.x, 0, d.z)，B 的形式同 2。1、2 在构建块时和每帧都求；3、4 只在每帧的 slot 23（3d24710）里求，构建块时保持单位阵。slot 23 以 r8b = 1 调用，r9 = `[ctx+0x120]+0xec` 起的三个 float（发射器位置）；之后 3d242d0 读这个 R 存 R 与 R⁻¹，不覆盖它 | 已确认 | 3d21210、3d24710；Re4Native `exp_rotation_correct.py`：伪造相机 2 组 × 发射器位置 2 组 × LocalRotation / RotationOrder 3 组，四种模式 48 例误差 ≤ 1.1e-7 |
 | `DivideEquidistant` | bool | 只有 Cylinder 读：方位角按椭圆弧长等分（3d22b00，见下方采样） | 已确认 | 3d22b00、3d23470 |
 | `DivideEquidistantCalcOuterCurveData` | bool | 内、外椭圆各建一张表，按 t 在两点之间插值；关时用平均半径建一张表 | 读码已确认；原生运行未覆盖（语料无） | 3d210d0、3d22b00 |
 | `DivideEquidistantRecalcEveryFrameData` | bool | 每帧重建表（半径或形状矩阵会变时）；关时只在首次建一次 | 读码已确认；原生运行未覆盖（语料无） | 3d210d0 |
@@ -1554,7 +1554,7 @@ frontDirType 0、1 时条带绕自身长度轴转向相机，端视时退化成�
 | 11 | EmitterContextType 7 的委托淡出计时器公式 | 该类型粒子的寿命结束 | 安装 3d53b40 | LF |
 | 12 | Life 模式 1/2 依赖的发射器状态 4、所有者状态 4/5 的含义 | 无限寿命粒子何时进入 Vanish | 推定为停止请求 | LF |
 | 13 | ScaleAnimDelayFrame（86）、RotateAnimDelayFrame（83）、Velocity3DDelayFrame（80）、Transform3DModifierDelayFrame（10） | 延迟起始 | 均未追踪 | SCA, ROT, SEM, MOD |
-| 14 | EmitterShape3D 的 RotationCorrect 3/4（每帧 slot 23 路径）、等距圆柱的双表与每帧重建（读码所得，语料无实例）；Box 壳判断的级联（读码所得，原生运行尚未区分）；Noise 偏移（粒子 +0x34）进入渲染位置的方式与它的清零位置 | 相机朝向形状的点位；Noise 的显示位置 | 3d21210、3d210d0；§3.1、§3.8 | SEM |
+| 14 | EmitterShape3D 等距圆柱的双表与每帧重建（读码所得，语料无实例）；Box 壳判断的级联（读码所得，原生运行尚未区分）；Noise 偏移（粒子 +0x34）进入渲染位置的方式与它的清零位置 | Noise 的显示位置 | 3d21210、3d210d0；§3.1、§3.8 | SEM |
 | 15 | Velocity3D ScreenSpace 在 CPU 上的实际行为 | ScreenSpace 速度方向 | 3d1a9c0 | SEM |
 | 16 | UVSequence 余量 `frac·(1/60)`；Rotate90 方向 | speed ≠ 1 时的帧时刻 | 3d1eee9 | UVS |
 | 17 | RibbonTrail 头部布局：exe 读法与语料、C# 布局冲突（按 exe 读法官方文件 alpha 为 0） | 52 个官方 RibbonTrail 是否可见 | 一次只读实机检查粒子 +0x4c 即可判定 | RT |

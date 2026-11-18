@@ -127,7 +127,7 @@
       "RangeDivideVerticalNum": { "help": "纵向均分数（Sphere、Cylinder）。纵向下标 = c % V，位置 = 下标/(V − 1)，V = 1 时取中点。", "when": {"field": "ShapeType", "in": ["Shape3DType_Sphere", "Shape3DType_Cylinder"], "why": "只有 Sphere、Cylinder 读它；Box 用 RangeDivideNum"} },
       "LocalRotation": { "help": "形状旋转，按 RotationOrder 组合，每帧重建。", "unit": "弧度" },
       "RotationOrder": { "help": "同 Transform3D.RotationOrder。" },
-      "RotationCorrect": { "help": "形状旋转按相机修正：1 与相机朝向平行；2 只跟相机的偏航；3、4 朝向相机（4 只绕 Y 轴）。", "status": "3、4 的具体基向量" },
+      "RotationCorrect": { "help": "形状旋转按相机修正，LocalRotation 叠在修正之前：1 与相机朝向平行；2 只跟相机的偏航；3 形状的 +Z 指向相机；4 同 3，但只绕 Y 轴转。" },
       "UseExtension": { "help": "0 时 ScaleHorizontal / ScaleVertical 被默认值覆盖（不起作用）。" },
       "ScaleHorizontal": { "help": "Sphere / Cylinder：方位角区间 θ = start + t·span；Box：锥形收缩系数。", "when": {"field": "UseExtension", "nonZero": true, "why": "UseExtension 为 0：被默认值覆盖"} },
       "ScaleVertical": { "help": "Sphere：仰角区间 φ = start + t·span；Box：锥形收缩系数；Cylinder：沿高度的收缩。", "when": {"field": "UseExtension", "nonZero": true, "why": "UseExtension 为 0：被默认值覆盖"} },

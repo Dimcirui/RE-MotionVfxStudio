@@ -2,16 +2,19 @@
 
     python -I -X utf8 -u exp_rotation_correct.py
 
-3d21210 builds the shape rotation (shape block +0x40, three rows of three floats, stride 0x10). For modes 1 and 2 it
-asks the scene for the camera (3a3f920) and its matrix (3a17660); modes 3 and 4 use 3a17ad0, the camera position
-(row 3) minus the emitter position, and are evaluated only on the per-frame pass (slot 23, 3d24710: r8b = 1), which
-this harness does not run, so they are reported, not checked. Here the camera lookup returns a fake object and both
-matrix getters write a chosen matrix C (row-vector rows: right, up, forward, position).
+3d21210 builds the shape rotation (shape block +0x40, three rows of three floats, stride 0x10). The camera lookup
+(3a3f920) returns a fake object and both matrix getters (3a17660 for modes 1, 2; 3a17ad0 for modes 3, 4) write a
+chosen matrix C (row-vector rows: right, up, forward, position). Modes 3 and 4 are evaluated only on the per-frame
+pass (slot 23, 3d24710), which calls 3d21210 with r8b = 1 and r9 = the emitter position; the harness calls 3d21210
+that way directly, after LocalRotation and RotationOrder are written into the block.
 
-Checked on a temporary copy of csa013 saliva (LocalRotation 0, RotationCorrect patched), for two cameras:
-  mode 1 ParallelCamera       R = transpose of C's 3x3
-  mode 2 ParallelCameraAxisY  z = normalize(C[0][2], 0, C[2][2]) (R mode 1's third row with y dropped);
-                              R = ((z.z, 0, -z.x), (0, 1, 0), z)
+Checked on a temporary copy of csa013 saliva (RotationCorrect patched), two cameras x two emitter positions x three
+LocalRotation / RotationOrder settings. With L = the mode-0 result (LocalRotation alone), R = L . B, where B is
+  mode 1 ParallelCamera       transpose of C's 3x3
+  mode 2 ParallelCameraAxisY  z = normalize(C[0][2], 0, C[2][2]); B = ((z.z, 0, -z.x), (0, 1, 0), z)
+  mode 3 ToCamera             d = C[3] - emitter; z = normalize(d); x = normalize(C[1] x d); B = (x, z x x, z)
+  mode 4 ToCameraAxisY        z = normalize(d.x, 0, d.z); B = ((z.z, 0, -z.x), (0, 1, 0), z)
+The build pass (one tick, LocalRotation 0) is checked for modes 0-2: it leaves modes 3 and 4 at identity.
 """
 import ctypes
 import json
@@ -53,7 +56,7 @@ def camera(yaw, pitch, roll, pos):
     return [R[0] + [0], R[1] + [0], R[2] + [0], list(pos) + [1]]
 
 
-def run(mode, C):
+def run(mode, C, pos, local, order):
     import emitter as em
     import re4native as rn
     img = rn.load()
@@ -71,42 +74,83 @@ def run(mode, C):
     m.play()
     m.tick(1 / 60)
     blk = m.block_of(SHAPE)
-    R = [list(struct.unpack("<3f", img.read(blk + 0x40 + 0x10 * i, 12))) for i in range(3)]
-    return dict(R=R, calls=sorted({c[0] for c in em.CALLS if c[0].startswith("camera")}))
+
+    def rows():
+        return [list(struct.unpack("<3f", img.read(blk + 0x40 + 0x10 * i, 12))) for i in range(3)]
+    build = rows()
+    ctypes.memmove(blk + 0x2c, struct.pack("<3f", *local), 12)
+    ctypes.memmove(blk + 0x38, struct.pack("<I", order), 4)
+    p = img.alloc(16)
+    ctypes.memmove(p, struct.pack("<4f", *pos, 0), 16)
+    fn = img.function(0x3D21210, None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint8, ctypes.c_void_p)
+    img.call(fn, None, blk, 1, p)
+    return dict(build=build, frame=rows(), calls=sorted({c[0] for c in em.CALLS if c[0].startswith("camera")}))
 
 
-def expected(mode, C):
+def mul(a, b):
+    return [[sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
+
+
+def norm(v):
+    n = math.sqrt(sum(x * x for x in v))
+    return [x / n for x in v]
+
+
+def cross(a, b):
+    return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+
+
+def basis(mode, C, pos):
+    """B for one mode; the shape rotation is L . B."""
     if mode == 0:
         return [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
-    T = [[C[j][i] for j in range(3)] for i in range(3)]
-    if mode == 1:
-        return T
-    z = [T[2][0], 0.0, T[2][2]]
-    n = math.hypot(z[0], z[2])
-    z = [z[0] / n, 0.0, z[2] / n]
+    if mode in (1, 2):
+        T = [[C[j][i] for j in range(3)] for i in range(3)]
+        if mode == 1:
+            return T
+        z = norm([T[2][0], 0.0, T[2][2]])
+    else:
+        d = [C[3][i] - pos[i] for i in range(3)]
+        if mode == 3:
+            z = norm(d)
+            x = norm(cross(C[1][:3], d))
+            return [x, cross(z, x), z]
+        z = norm([d[0], 0.0, d[2]])
     return [[z[2], 0.0, -z[0]], [0.0, 1.0, 0.0], z]
+
+
+def worst(a, b):
+    return max(abs(x - y) for ra, rb in zip(a, b) for x, y in zip(ra, rb))
 
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "run":
-        print("RESULT " + json.dumps(run(int(sys.argv[2]), json.loads(sys.argv[3]))))
+        print("RESULT " + json.dumps(run(**json.loads(sys.argv[2]))))
         return
     cams = [camera(math.radians(30), math.radians(20), 0, (3, 2, 5)), camera(math.radians(-50), math.radians(-35), math.radians(10), (-1, 4, 2))]
+    positions = [[1, 0.5, -2], [-4, 3, 6]]
+    locals_ = [([0, 0, 0], 0), ([0.3, 0.5, 0.2], 0), ([-0.7, 0.4, 1.1], 3)]
+
+    def one(**a):
+        p = subprocess.run([sys.executable, "-I", "-X", "utf8", os.path.abspath(__file__), "run", json.dumps(a)],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
+        line = next((l for l in p.stdout.splitlines() if l.startswith("RESULT ")), None)
+        if line is None:
+            raise RuntimeError(p.stdout[-400:] + p.stderr[-800:])
+        return json.loads(line[7:])
     ok = True
     for ci, C in enumerate(cams):
-        for mode in range(5):
-            p = subprocess.run([sys.executable, "-I", "-X", "utf8", os.path.abspath(__file__), "run", str(mode), json.dumps(C)],
-                               capture_output=True, text=True, encoding="utf-8", errors="replace")
-            line = next((l for l in p.stdout.splitlines() if l.startswith("RESULT ")), None)
-            r = json.loads(line[7:])
-            if mode in (0, 1, 2):
-                err = max(abs(a - b) for ra, rb in zip(r["R"], expected(mode, C)) for a, b in zip(ra, rb))
-                ok &= err < 1e-5
-                print(json.dumps(dict(camera=ci, mode=mode, worst=err, calls=r["calls"])))
-            else:
-                print(json.dumps(dict(camera=ci, mode=mode, not_checked="per-frame pass not run", calls=r["calls"],
-                                      R=[[round(v, 4) for v in row] for row in r["R"]])))
-    print("RESULT " + json.dumps(dict(exp="rotation_correct", checked_modes=[0, 1, 2], status="PASS" if ok else "FAIL")))
+        for pi, pos in enumerate(positions):
+            for li, (local, order) in enumerate(locals_):
+                L = one(mode=0, C=C, pos=pos, local=local, order=order)["frame"]
+                for mode in range(1, 5):
+                    r = one(mode=mode, C=C, pos=pos, local=local, order=order)
+                    err = worst(r["frame"], mul(L, basis(mode, C, pos)))
+                    if li == 0:
+                        err = max(err, worst(r["build"], basis(mode if mode < 3 else 0, C, pos)))
+                    ok &= err < 1e-5
+                    print(json.dumps(dict(camera=ci, position=pi, local=li, mode=mode, worst=err, calls=r["calls"])))
+    print("RESULT " + json.dumps(dict(exp="rotation_correct", checked_modes=[0, 1, 2, 3, 4], status="PASS" if ok else "FAIL")))
 
 
 if __name__ == "__main__":
