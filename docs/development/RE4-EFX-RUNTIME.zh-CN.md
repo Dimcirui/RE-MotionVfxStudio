@@ -87,7 +87,7 @@ C# 按引擎读码把它们换成下表的语义类型，字节不变，字段�
 | 输入 | 说明 |
 |---|---|
 | re4.exe | 当前补丁，静态反汇编（capstone）。RVA 为该补丁的相对地址 |
-| 着色器 | `natives/stm/systems/shader/vfx/*.vsdf.221007880`（billboarddraw、ribbonlengthdraw、ribbonlengthcompute 等，GpuParticleVS 家族）与 `systems/shader/primitivevfx*.vsdf`（Polygon3DConstant 家族），按块切出后 `dxc -dumpbin`；行号指反汇编文本的行 |
+| 着色器 | `natives/stm/systems/shader/vfx/*.vsdf.221007880`（billboarddraw、ribbonlengthdraw、ribbonlengthcompute 等，GpuParticleVS 家族）与 `systems/shader/primitivevfx*.vsdf`（Polygon3DConstant 家族），按块切出后 `dxc -dumpbin`（[tools/ShaderDump](../../tools/ShaderDump/README.md)，另可转成伪代码）；行号指反汇编文本的行 |
 | 语料 | RE4 官方 .efx 全量解析（re4.jsonl，50,761 个发射器）。计数写在"依据"栏，形如"语料 2954/3755" |
 | 实机 | skill `re-efx-authoring/references/attributes.md` §8 的逐粒子探针 |
 
