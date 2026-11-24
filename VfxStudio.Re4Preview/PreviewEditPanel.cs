@@ -15,7 +15,7 @@ internal sealed class PreviewEditPanel
     private string? documentId,attemptedInspection;
     private int entryPosition=-1,selected=-1,page;
     private PreviewPropertyDraft? draft;
-    private string filter="",savePath="",cachedFilter="";
+    private string filter="",cachedFilter="";
     private bool showReadOnly=true,cachedShowReadOnly,hideInactive;
     private PropertyRow[] rows=[],filtered=[];
     // Mode handling (FieldSemantics "when"): fields by path for reading draft values, and each mode field's dependants.
@@ -171,7 +171,7 @@ internal sealed class PreviewEditPanel
         bool synced=state?.Manifest?.Revision==state?.Revision && displayed?.Key==state?.Manifest?.Key;
         ImGui.TextDisabled(state==null?"文档准备中":
             $"r{state.Revision}{(state.Dirty?" · 有未保存修改":"")} · 画面 {(displayed==null?"未加载":"r"+displayed.Revision)}{(synced?"":" · 等待更新")}");
-        if(ImGui.IsItemHovered()) ImGui.SetTooltip("r 是文档修订号，每应用一次修改加 1；“有未保存修改”指已应用的修改还没保存成 EFX 副本。\n"+
+        if(ImGui.IsItemHovered()) ImGui.SetTooltip("r 是文档修订号，每应用一次修改加 1；“有未保存修改”指已应用的修改还没另存为 EFX 文件。\n"+
             "画面是 3D 视图正在显示的修订。应用修改后保留 tick 和播放状态。\n从属性目录把属性拖到这个面板上可以添加。");
         var notes=new List<string>();
         if(error!=null) notes.Add(error);
@@ -314,21 +314,19 @@ internal sealed class PreviewEditPanel
         // Saving writes the whole EFX file (every entry), never the source: see the tooltip.
         ImGui.Separator();
         ImGui.BeginDisabled(busy || state?.Manifest==null || stressMode);
-        if(ImGui.Button("保存整个 EFX 为副本")) command=new("save",SavePath:string.IsNullOrWhiteSpace(savePath)?null:savePath);
+        if(ImGui.Button("另存为…")) command=new("save_as");
         ImGui.EndDisabled();
         if(ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled)) ImGui.SetTooltip(
-            "把整个 EFX 文件（所有 entry 已应用的修改，不含没应用的草稿）写成一个新文件。\n"+
-            "不会覆盖源文件，也不能写进游戏目录或解包目录。每次保存都生成一个新文件。\n"+
-            "路径在“更多…”里设置；留空时存到会话目录，文件名带修订号。");
+            "把整个 EFX 文件（所有 entry 已应用的修改，不含没应用的草稿）写到你选的位置。\n"+
+            "文件名默认与导入的 EFX 相同。不能覆盖源文件，也不能写进游戏目录或解包目录。");
         ImGui.SameLine();ImGui.BeginDisabled(busy || state?.SavedPath==null || HasUnappliedChanges);
-        if(ImGui.Button("打开副本")) command=new("open_saved");
+        if(ImGui.Button("打开已保存文件")) command=new("open_saved");
         ImGui.EndDisabled();
-        if(ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled)) ImGui.SetTooltip("把上次保存的副本作为当前文档打开，确认它能正确读回");
+        if(ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled)) ImGui.SetTooltip("把上次另存的文件作为当前文档打开，确认它能正确读回");
         ImGui.SameLine();
         if(ImGui.Button("更多…")) ImGui.OpenPopup("文件操作");
         if(ImGui.BeginPopup("文件操作"))
         {
-            ImGui.SetNextItemWidth(360);ImGui.InputTextWithHint("另存路径","留空 = 会话目录",ref savePath,1024);
             if(state?.SavedPath is {} savedFull) {ImGui.SetNextItemWidth(360);ImGui.InputText("上次保存",ref savedFull,(uint)Encoding.UTF8.GetByteCount(savedFull)+1,ImGuiInputTextFlags.ReadOnly);}
             ImGui.BeginDisabled(busy || state?.Manifest==null || stressMode);
             if(ImGui.Button("重试预览")) {command=new("publish_offline_preview");ImGui.CloseCurrentPopup();}

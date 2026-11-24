@@ -29,7 +29,8 @@ public sealed record PreviewEditorParameters(int EntryPosition, int BillboardAtt
 
 public sealed record PreviewEditorState(long Revision, bool Dirty, bool CanUndo, bool CanRedo,
     OfflinePreviewManifest? Manifest, PreviewEditorParameters? Parameters, string? PublicationError,
-    string? SavedPath, string? Warning, PreviewAttributeInfo[]? Attributes = null, PreviewInspection? Inspection = null);
+    string? SavedPath, string? Warning, PreviewAttributeInfo[]? Attributes = null, PreviewInspection? Inspection = null,
+    string? Source = null);
 
 /// <summary>The backend rejected a request; <see cref="Reply"/> is its full answer.</summary>
 public sealed class PreviewBackendException(string message, JsonObject reply) : InvalidOperationException(message)
@@ -141,7 +142,7 @@ public sealed class PreviewEditorSession : IDisposable
                     reply["offlinePreview"]?.Deserialize<OfflinePreviewManifest>(Json)??previous?.Manifest,
                     reply["offlinePreviewParameters"]?.Deserialize<PreviewEditorParameters>(Json)??previous?.Parameters,
                     reply["offlinePreviewError"]?.GetValue<string>(),reply["outputPath"]?.GetValue<string>()??previous?.SavedPath,
-                    doc?["warning"]?.GetValue<string>());
+                    doc?["warning"]?.GetValue<string>(),Source:doc?["source"]?.GetValue<string>()??previous?.Source);
                 if(State.Manifest is {} manifest && doc?["entries"] is JsonArray entries)
                 {
                     var selected=entries.FirstOrDefault(e=>e?["index"]?.GetValue<int>()==manifest.EntryPosition);
@@ -205,19 +206,27 @@ public sealed class PreviewEditorSession : IDisposable
         finally {gate.Release();}
     }
 
-    public async Task<PreviewEditorState> CommandAsync(string action, string? savePath=null)
+    /// <summary>The protected root that contains <paramref name="path"/>, or null.</summary>
+    public string? ProtectedRootOf(string path)
+    {
+        string full=Path.GetFullPath(path);
+        return protectedRoots.FirstOrDefault(root=>
+            full.StartsWith(Path.TrimEndingDirectorySeparator(root)+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(Path.TrimEndingDirectorySeparator(full),Path.TrimEndingDirectorySeparator(root),StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <param name="overwrite">For "save" with a path: replace an existing file there. Only set it
+    /// after the user confirmed the replacement.</param>
+    public async Task<PreviewEditorState> CommandAsync(string action, string? savePath=null, bool overwrite=false)
     {
         if(action is not ("undo" or "redo" or "save" or "status" or "publish_offline_preview")) throw new ArgumentException("未知编辑操作。");
         if(action=="save" && savePath!=null)
         {
             if(!Path.IsPathFullyQualified(savePath)) throw new ArgumentException("另存路径必须是完整的绝对路径。");
-            string full=Path.GetFullPath(savePath);
-            foreach(var root in protectedRoots)
-                if(full.StartsWith(Path.TrimEndingDirectorySeparator(root)+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))
-                    throw new ArgumentException("不能保存到游戏目录或解包目录："+root);
+            if(ProtectedRootOf(savePath) is {} root) throw new ArgumentException("不能保存到游戏目录或解包目录："+root);
         }
         await gate.WaitAsync();
-        try {return await Call(action,savePath==null?null:new(){["path"]=savePath});}
+        try {return await Call(action,savePath==null?null:new(){["path"]=savePath,["overwrite"]=overwrite});}
         finally {gate.Release();}
     }
 

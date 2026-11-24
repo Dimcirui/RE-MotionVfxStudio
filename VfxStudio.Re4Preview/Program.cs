@@ -479,8 +479,22 @@ void StartEditorCommand(PreviewEditCommand command, bool warmup=false)
         "curve_key" => SendCurveKey(command),
         "structure" => Structure(command),
         "open_source" => OpenOriginal(),
+        "save_as" => SaveAs(),
         _ => editor.CommandAsync(command.Action,command.SavePath)
     });
+}
+// The dialog proposes the imported file's own name. It opens in the folder of the last save, else
+// beside the source, unless that is the game directory or the unpacked resources (saving there is
+// refused), in which case it opens in the session's output folder.
+async Task<PreviewEditorState> SaveAs()
+{
+    var state=editor.State??throw new InvalidOperationException("文档还没打开。");
+    string name=state.Source is {} source?Path.GetFileName(source):"effect.efx.5571972";
+    string? folder=state.SavedPath is {} saved?Path.GetDirectoryName(saved):state.Source is {} s?Path.GetDirectoryName(s):null;
+    if(folder==null || editor.ProtectedRootOf(folder)!=null || !Directory.Exists(folder))
+        Directory.CreateDirectory(folder=Path.Combine(editor.Directory,"saved"));
+    string? path=await SaveAsDialog.ShowAsync(window.Native?.Win32?.Hwnd??0,folder,name);
+    return path==null?state:await editor.CommandAsync("save",path,overwrite:true);
 }
 
 // ---- AI control pipe (see PreviewControlServer). Every request runs on this thread, one at a time.

@@ -279,7 +279,7 @@ internal sealed partial class EditorEngine : IDisposable
                     break;
                 case "undo": RestoreHistory(undo, redo); break;
                 case "redo": RestoreHistory(redo, undo); break;
-                case "save": response["outputPath"] = Save(OptionalText(request, "path")); break;
+                case "save": response["outputPath"] = Save(OptionalText(request, "path"), request["overwrite"]?.GetValue<bool>() == true); break;
                 case "begin_export": response["desktop"] = BeginExport(request); break;
                 case "prepare_export": response["exportRequest"] = PrepareExport(request); break;
                 case "finish_export": response["exportedFiles"] = FinishExport(request); break;
@@ -684,7 +684,10 @@ internal sealed partial class EditorEngine : IDisposable
         while (stack.Count > 64 || (stack.Count > 1 && stack.Sum(b => (long)b.Length) > 256 * 1024 * 1024)) stack.RemoveAt(0);
     }
 
-    private string Save(string? requestedPath)
+    /// <param name="overwrite">Replace an existing file at <paramref name="requestedPath"/>. Only the
+    /// preview window's Save As dialog sets it, after the user confirmed the replacement there. The
+    /// imported source and the protected roots stay refused either way.</param>
+    private string Save(string? requestedPath, bool overwrite = false)
     {
         Require();
         string stem = Path.GetFileName(source!);
@@ -706,7 +709,7 @@ internal sealed partial class EditorEngine : IDisposable
                     throw new InvalidOperationException("保存路径经过符号链接或目录联接，无法确认不在受保护目录内：" + folder.FullName);
         if (!path.EndsWith($".efx.{(int)document!.Header.Version}", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Output suffix must match the loaded EFX version.");
-        WriteNewFile(path, ResolvePrecache(Validate(Require(), path), path));
+        WriteNewFile(path, ResolvePrecache(Validate(Require(), path), path), overwrite && requestedPath != null);
         savedHash = Hash(bytes!);
         return path;
     }
@@ -759,12 +762,12 @@ internal sealed partial class EditorEngine : IDisposable
         }
     }
 
-    private static void WriteNewFile(string path, byte[] content)
+    private static void WriteNewFile(string path, byte[] content, bool overwrite = false)
     {
         path = Path.GetFullPath(path);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         string temporary = Path.Combine(Path.GetDirectoryName(path)!, "." + Guid.NewGuid().ToString("N") + ".tmp");
-        try { File.WriteAllBytes(temporary, content); File.Move(temporary, path, overwrite: false); }
+        try { File.WriteAllBytes(temporary, content); File.Move(temporary, path, overwrite); }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
