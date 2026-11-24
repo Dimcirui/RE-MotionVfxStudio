@@ -282,11 +282,34 @@ public sealed class PreviewAttributeCatalog
 /// <param name="Value">Text as PtBehaviorVariable.Create reads it.</param>
 public sealed record PreviewBehaviorParameter(string Name, string Type, string Value);
 
+/// <summary>A parameter RE4 sets on a script class: its type, how many RE4 instances set it and its most common value.</summary>
+public sealed record PreviewBehaviorCandidate(string Name, string Type, int Uses, string Value);
+
 /// <param name="Uses">PtBehavior instances of this class in RE4 (top-level and embedded).</param>
 /// <param name="Carrier">The usual attribute list of a top-level entry carrying it, PtBehavior included; empty when
 /// RE4 has none.</param>
-public sealed record PreviewBehaviorClass(string Name, int Uses, IReadOnlyList<PreviewBehaviorParameter> Parameters, IReadOnlyList<string> Carrier)
+/// <param name="Candidates">Every parameter RE4 sets on this class, in the one order all RE4 instances agree with.</param>
+public sealed record PreviewBehaviorClass(string Name, int Uses, IReadOnlyList<PreviewBehaviorParameter> Parameters, IReadOnlyList<string> Carrier,
+    IReadOnlyList<PreviewBehaviorCandidate>? Candidates = null)
 {
+    public PreviewBehaviorCandidate? Candidate(string name) => Candidates?.FirstOrDefault(c => c.Name == name);
+
+    /// <summary>Where a new parameter <paramref name="name"/> goes among <paramref name="present"/> (the names in file order):
+    /// before the first one that comes after it in <see cref="Candidates"/>; names outside the catalog count as last.
+    /// RE4 instances always keep this order (each is a subsequence of it).</summary>
+    public int InsertIndex(IReadOnlyList<string> present, string name)
+    {
+        var order = (Candidates ?? []).Select(c => c.Name).ToList();
+        int rank = order.IndexOf(name);
+        if (rank < 0) return present.Count;
+        for (int i = 0; i < present.Count; i++)
+        {
+            int other = order.IndexOf(present[i]);
+            if ((other < 0 ? order.Count : other) > rank) return i;
+        }
+        return present.Count;
+    }
+
     /// <summary>The class name without its namespace (EffectDecal).</summary>
     public string ShortName => Name[(Name.LastIndexOf('.') + 1)..];
 
@@ -324,7 +347,10 @@ public sealed class PreviewBehaviorTemplates
                 c.Value.GetProperty("parameters").EnumerateArray().Select(p => new PreviewBehaviorParameter(
                     p.GetProperty("name").GetString()!, p.GetProperty("type").GetString()!, p.GetProperty("value").GetString()!)).ToArray(),
                 c.Value.GetProperty("carrier").ValueKind == JsonValueKind.Object
-                    ? c.Value.GetProperty("carrier").GetProperty("attributes").EnumerateArray().Select(a => a.GetString()!).ToArray() : []))
+                    ? c.Value.GetProperty("carrier").GetProperty("attributes").EnumerateArray().Select(a => a.GetString()!).ToArray() : [],
+                c.Value.TryGetProperty("candidates", out var candidates)
+                    ? candidates.EnumerateArray().Select(p => new PreviewBehaviorCandidate(p.GetProperty("name").GetString()!, p.GetProperty("type").GetString()!,
+                        p.GetProperty("uses").GetInt32(), p.GetProperty("value").GetString()!)).ToArray() : null))
             .OrderByDescending(c => c.Uses).ToArray();
         var prefabs = document.RootElement.GetProperty("decalPrefabs").EnumerateArray()
             .Select(p => (p.GetProperty("path").GetString()!, p.GetProperty("uses").GetInt32())).ToArray();

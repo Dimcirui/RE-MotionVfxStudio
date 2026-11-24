@@ -41,6 +41,7 @@ dotnet <仓库>/VfxStudio.Mcp/bin/Release/net8.0/VfxStudio.Mcp.dll --re4-preview
 | `add_attribute` | 按类型添加一个属性，字段取自 RE4 里同类属性的典型值（与窗口相同）；PtBehavior 还可用 `script` 指定脚本类（默认 EffectDecal），参数按 RE4 常见写法填入；后台拒绝重复类型、第二个 Type 属性和缺少基础属性的情况 |
 | `remove_attribute` | 删除一个属性；其他属性和分组回读不一致时整笔回滚 |
 | `copy_attribute` | 把一个属性复制到后台的复制缓冲区；缓冲区是快照，`open` 换文档后仍保留 |
+| `behavior_parameter` | PtBehavior 的单个参数：`operation` add 从该脚本类的 RE4 候选目录取类型与默认值（可给 `value`），按目录的规范顺序插入（同 MHWs EFX Editor）；remove 按名字删除。参数头的位置号随之重排。一个撤销步 |
 | `paste_attribute` | 粘贴到当前发射器；已有同类型属性时需传 `replaceAttributeIndex` 指定替换对象。来源与目标的文件级表达式／变量表不同时拒绝 |
 | `add_entry` | 追加一个新 entry（Type 限预览能画的六种），带同 Type 在 RE4 里 95% 以上都有的属性，字段取典型值；或者用 `script`（PtBehavior 脚本类，如 `via.effect.script.EffectDecal`）新建 RE4 常见的脚本载体（NoDraw + PtBehavior，参数取 RE4 常见值）。新 entry 成为当前 entry，不加入 effect group |
 | `duplicate_entry` | 在文件末尾追加一个 entry 的副本，预览能画时选中它 |

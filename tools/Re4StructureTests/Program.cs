@@ -140,6 +140,54 @@ Check(savedEntry != null && savedEntry.Attributes.Select(a => a.type.ToString())
     "a decal carrier entry (NoDraw + EffectDecal) saves with RE4's carrier attributes and parameters; the prefab path changed to Burnt",
     $"{string.Join(",", savedEntry?.Attributes.Select(a => a.type) ?? [])}; {savedBehavior?.properties.Count} parameters; {Path.GetFileName(saved)}");
 
+// 8. One PtBehavior parameter at a time (behavior_parameter), placed by the class's RE4 canonical order as the MHWs EFX
+// Editor does: EmissiveIntensity (Float) and OBBScalarAdd (Range, header 2) go to their places, RandomRollRange leaves from
+// the middle; a duplicate is refused. Saved and read back: names follow the canonical order, values are as sent, and
+// every header index equals its position (as in all 13773 RE4 parameters).
+JsonObject ParameterBody(string action, string name, string? value = null)
+{
+    var body = new JsonObject { ["target"] = Entry(decalEntry, behaviorIndex), ["operation"] = action, ["name"] = name };
+    if (action == "add")
+    {
+        var c = decal.Candidate(name)!;
+        body["type"] = c.Type; body["value"] = value ?? c.Value;
+        body["order"] = new JsonArray(decal.Candidates!.Select(x => (JsonNode?)x.Name).ToArray());
+    }
+    return body;
+}
+var names = decal.Parameters.Select(p => p.Name).ToList();
+(state, _) = await editor.SendRawAsync("behavior_parameter", ParameterBody("add", "EmissiveIntensity", "20"), editor.State!.Revision);
+names.Insert(decal.InsertIndex(names, "EmissiveIntensity"), "EmissiveIntensity");
+(state, _) = await editor.SendRawAsync("behavior_parameter", ParameterBody("add", "OBBScalarAdd"), state.Revision);
+names.Insert(decal.InsertIndex(names, "OBBScalarAdd"), "OBBScalarAdd");
+(state, _) = await editor.SendRawAsync("behavior_parameter", ParameterBody("remove", "RandomRollRange"), state.Revision);
+names.Remove("RandomRollRange");
+try
+{
+    await editor.SendRawAsync("behavior_parameter", ParameterBody("add", "EmissiveIntensity"), state.Revision);
+    Check(false, "behavior_parameter refuses a parameter that is already there");
+}
+catch (Exception ex) when (ex is PreviewBackendException or InvalidOperationException)
+{
+    Check(editor.State!.Revision == state.Revision, "behavior_parameter refuses a parameter that is already there", ex.Message);
+}
+(_, reply) = await editor.SendRawAsync("save", new(), null);
+saved = reply["outputPath"]!.GetValue<string>();
+savedFile = new ReeLib.EfxFile(new ReeLib.FileHandler(new MemoryStream(File.ReadAllBytes(saved)), saved) { FileVersion = (int)ReeLib.Efx.EfxVersion.RE4 });
+savedBehavior = savedFile.Read() ? savedFile.Entries[decalEntry].Attributes.OfType<ReeLib.Efx.Structs.Pt.EFXAttributePtBehavior>().Single() : null;
+var savedNames = savedBehavior?.properties.Select(p => p.behaviorProperty!).ToList() ?? [];
+var canonical = decal.Candidates!.Select(c => c.Name).ToList();
+Check(savedNames.SequenceEqual(names) && savedNames.Select(n => canonical.IndexOf(n)).Zip(savedNames.Select(n => canonical.IndexOf(n)).Skip(1)).All(z => z.First < z.Second),
+    "added parameters sit at their canonical places and the removed one is gone", string.Join(",", savedNames));
+var emissive = savedBehavior?.properties.Single(p => p.behaviorProperty == "EmissiveIntensity");
+var obb = savedBehavior?.properties.Single(p => p.behaviorProperty == "OBBScalarAdd");
+Check(emissive?.ValueText() == "20" && obb?.ValueText() == decal.Candidate("OBBScalarAdd")!.Value && obb?.variable?.unkn == 2 && emissive?.variable?.unkn == 1,
+    "values as sent (EmissiveIntensity 20, OBBScalarAdd RE4's usual value) with RE4's headers (Range 2, Float 1)", $"{emissive?.ValueText()} / {obb?.ValueText()}");
+Check(savedBehavior!.properties.Select((p, i) => p.variable?.re4_unkn1 == i && p.variable?.re4_unkn0 == -1).All(ok => ok),
+    "every parameter header index is renumbered to its position");
+(state, _) = await editor.SendRawAsync("undo", new(), editor.State!.Revision);
+Check(state.CanRedo, "behavior_parameter is one undo step");
+
 Console.WriteLine($"{(failures == 0 ? "PASS" : "FAIL")}: {checks - failures}/{checks}; session {root}");
 if (failures > 0) Environment.ExitCode = 1;
 

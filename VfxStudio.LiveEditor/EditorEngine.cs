@@ -277,6 +277,9 @@ internal sealed partial class EditorEngine : IDisposable
                 case "remove_attribute":
                     RemoveAttribute(Target.From(request), response);
                     break;
+                case "behavior_parameter":
+                    EditBehaviorParameter(Target.From(request), request);
+                    break;
                 case "undo": RestoreHistory(undo, redo); break;
                 case "redo": RestoreHistory(redo, undo); break;
                 case "save": response["outputPath"] = Save(OptionalText(request, "path"), request["overwrite"]?.GetValue<bool>() == true); break;
@@ -513,6 +516,68 @@ internal sealed partial class EditorEngine : IDisposable
         });
         response["deletion"] = new JsonObject { ["kind"] = "entry", ["removedGroupReferences"] = references,
             ["bytesBefore"] = before, ["bytesAfter"] = bytes!.Length, ["trailingBytes"] = 0, ["groupSlotsPreserved"] = true };
+    }
+
+    /// <summary>Adds or removes one parameter of an RE4 PtBehavior (operation add / remove). add: {name, type, value, index or order} — index is where it goes
+    /// in the list (the client takes it from the class's canonical order; RE4 instances always keep that order); remove:
+    /// {name}. Every parameter's header index (re4_unkn1) is renumbered to its position, as in all RE4 files.</summary>
+    private void EditBehaviorParameter(Target target, JsonObject request)
+    {
+        if (target.AttributeIndex == null) throw new ArgumentException("attributeIndex is required.");
+        if (Resolve(target) is not ReeLib.Efx.Structs.Pt.EFXAttributePtBehavior behavior) throw new ArgumentException("The attribute is not a PtBehavior.");
+        var version = ResolveTargetFile(target).Header.Version;
+        if (version != EfxVersion.RE4) throw new NotSupportedException("PtBehavior parameters can be edited for RE4 only.");
+        string action = Text(request, "operation"), name = Text(request, "name");
+        var names = behavior.properties.Select(p => p.behaviorProperty ?? "").ToList();
+        List<string> expected;
+        Action change;
+        if (action == "add")
+        {
+            if (names.Contains(name)) throw new InvalidOperationException($"参数 {name} 已经存在。");
+            if (!Enum.TryParse<ReeLib.Efx.Structs.Pt.PtBehaviorPropType>(Text(request, "type"), false, out var kind))
+                throw new ArgumentException("Unknown PtBehavior parameter type: " + Text(request, "type"));
+            int index = request["index"] is JsonValue v && v.TryGetValue(out int i) ? i : names.Count;
+            // order: the class's canonical parameter list (RE4 instances are subsequences of it). The new parameter goes
+            // before the first present one ranked after it; names outside the list rank last.
+            if (request["order"] is JsonArray orderNode)
+            {
+                var order = orderNode.Select(n => n?.ToString() ?? "").ToList();
+                int rank = order.IndexOf(name);
+                if (rank >= 0)
+                {
+                    index = names.Count;
+                    for (int k = 0; k < names.Count; k++)
+                    {
+                        int other = order.IndexOf(names[k]);
+                        if ((other < 0 ? order.Count : other) > rank) { index = k; break; }
+                    }
+                }
+            }
+            if (index < 0 || index > names.Count) throw new ArgumentOutOfRangeException("index");
+            var parameter = ReeLib.Efx.Structs.Pt.PtBehaviorVariable.Create(version, index, name, kind, request["value"]?.ToString() ?? "");
+            expected = [.. names]; expected.Insert(index, name);
+            change = () => behavior.properties.Insert(index, parameter);
+        }
+        else if (action == "remove")
+        {
+            int index = names.IndexOf(name);
+            if (index < 0) throw new InvalidOperationException($"参数 {name} 不存在。");
+            expected = [.. names]; expected.RemoveAt(index);
+            change = () => behavior.properties.RemoveAt(index);
+        }
+        else throw new ArgumentException("operation must be add or remove.");
+        Mutate(() =>
+        {
+            change();
+            for (int i = 0; i < behavior.properties.Count; i++)
+                if (behavior.properties[i].variable is { } data) data.re4_unkn1 = (short)i;
+        }, reopened =>
+        {
+            var after = (ReeLib.Efx.Structs.Pt.EFXAttributePtBehavior)Resolve(target, reopened);
+            if (!after.properties.Select(p => p.behaviorProperty ?? "").SequenceEqual(expected) ||
+                after.properties.Select((p, i) => p.variable?.re4_unkn1 == i).Any(ok => !ok))
+                throw new InvalidDataException("PtBehavior parameters did not read back as written; rolled back.");
+        });
     }
 
     private void RemoveAttribute(Target target, JsonObject response)

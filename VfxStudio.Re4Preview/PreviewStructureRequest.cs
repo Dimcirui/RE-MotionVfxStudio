@@ -11,8 +11,12 @@ namespace VfxStudio.Re4Preview;
 /// the window uses the current revision.</param>
 /// <param name="Script">PtBehavior script class: add_attribute of PtBehavior fills it from that class's RE4 template;
 /// add_entry builds that class's usual carrier entry (NoDraw + PtBehavior).</param>
+/// <param name="Parameter">behavior_parameter: the parameter to add or remove (Type = "add" / "remove") on the PtBehavior
+/// at AttributeIndex.</param>
+/// <param name="Value">behavior_parameter add: the value (text as PtBehaviorVariable.Create reads it); null takes the most
+/// common RE4 value.</param>
 internal sealed record PreviewStructureRequest(string Op, int EntryPosition, int AttributeIndex = -1, string? Type = null, long? ExpectedRevision = null,
-    string? Script = null);
+    string? Script = null, string? Parameter = null, string? Value = null);
 
 /// <summary>Menu items shared by the node graph and the main panel.</summary>
 internal static class PreviewStructureMenu

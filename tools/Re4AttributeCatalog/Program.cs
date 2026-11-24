@@ -143,11 +143,38 @@ foreach (var (cls, found) in behaviors)
         .Select(i => instances.GroupBy(x => x[i].ValueText()).OrderByDescending(g => g.Count()).First().Key).ToArray();
     var best = instances.OrderByDescending(x => x.Select((p, i) => p.ValueText() == modes[i] ? 1 : 0).Sum()).First();
     var carrier = carriers.GetValueOrDefault(cls)?.OrderByDescending(c => c.Value).First();
+    // Every parameter RE4 sets on this class, in the one order all instances agree with (each instance's list is a
+    // subsequence of it; checked over the corpus), with its type, use count and most common value. A parameter added
+    // to an existing PtBehavior goes to its place in this order.
+    var all = found.SelectMany(f => f.Parameters).GroupBy(p => p.behaviorProperty!, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.Ordinal);
+    var before = all.Keys.ToDictionary(k => k, _ => new HashSet<string>(StringComparer.Ordinal), StringComparer.Ordinal);
+    foreach (var (_, list) in found)
+        for (int i = 0; i < list.Length; i++)
+            for (int j = i + 1; j < list.Length; j++) before[list[j].behaviorProperty!].Add(list[i].behaviorProperty!);
+    var firstSeen = new Dictionary<string, double>(StringComparer.Ordinal);
+    foreach (var name in all.Keys)
+        firstSeen[name] = found.Where(f => f.Parameters.Any(p => p.behaviorProperty == name))
+            .Average(f => Array.FindIndex(f.Parameters, p => p.behaviorProperty == name) / (double)Math.Max(1, f.Parameters.Length));
+    var order = new List<string>();
+    var pending = new HashSet<string>(all.Keys, StringComparer.Ordinal);
+    while (pending.Count > 0)
+    {
+        var ready = pending.Where(n => before[n].All(b => !pending.Contains(b))).OrderBy(n => firstSeen[n]).ToList();
+        if (ready.Count == 0) throw new InvalidDataException($"{cls}: parameter order is not consistent across the corpus");
+        order.Add(ready[0]); pending.Remove(ready[0]);
+    }
     templates[cls] = new
     {
         count = found.Count,
         signatureShare = Math.Round(signature.Count() / (double)found.Count, 3),
         parameters = best.Select(p => new { name = p.behaviorProperty, type = p.dataType.ToString(), value = p.ValueText() }),
+        candidates = order.Select(name => new
+        {
+            name,
+            type = all[name].GroupBy(p => p.dataType).OrderByDescending(g => g.Count()).First().Key.ToString(),
+            uses = all[name].Length,
+            value = all[name].GroupBy(p => p.ValueText()).OrderByDescending(g => g.Count()).First().Key,
+        }),
         carrier = carrier == null ? null : new { attributes = carrier.Value.Key.Split(','), entries = carrier.Value.Value },
     };
 }

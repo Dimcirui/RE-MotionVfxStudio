@@ -318,7 +318,8 @@ async Task<PreviewEditorState> Structure(PreviewEditCommand command)
     {
         "add_attribute"=>"添加 "+request.Type,"remove_attribute"=>"删除属性","copy_attribute"=>"复制属性","paste_attribute"=>"粘贴属性",
         "copy_entry"=>"复制 entry","paste_entry"=>"粘贴 entry","add_entry"=>"新建 entry","duplicate_entry"=>"创建副本","remove_entry"=>"删除 entry",
-        "emitter_priority"=>request.AttributeIndex>=0?"关闭 EmitterPriority":"开启 EmitterPriority",_=>request.Op
+        "emitter_priority"=>request.AttributeIndex>=0?"关闭 EmitterPriority":"开启 EmitterPriority",
+        "behavior_parameter"=>(request.Type=="remove"?"删除脚本参数 ":"添加脚本参数 ")+request.Parameter,_=>request.Op
     };
     try
     {
@@ -330,6 +331,12 @@ async Task<PreviewEditorState> Structure(PreviewEditCommand command)
             case "remove_attribute":
                 await Select(entry);
                 return await Send("remove_attribute",new(){["target"]=Target(request.AttributeIndex)});
+            case "behavior_parameter":
+            {
+                await Select(entry);
+                var body=await BehaviorParameterBody(Target(request.AttributeIndex),request.Type!,request.Parameter!,request.Value);
+                return await Send("behavior_parameter",body);
+            }
             case "copy_attribute":
                 return await Send("copy_efx",new(){["target"]=Target(request.AttributeIndex)},mutation:false);
             case "emitter_priority":
@@ -569,7 +576,7 @@ bool Settled(out string? error)
     else if(billboards!=null && billboards.Drawn==0 && billboards.Unsupported!=null) error=billboards.Unsupported;
     return true;
 }
-bool IsMutation(string action) => action is "set_fields" or "undo" or "redo" or "open" or "select_entry" or "add_attribute" or "remove_attribute" or "curve_key" or "paste_attribute"
+bool IsMutation(string action) => action is "set_fields" or "undo" or "redo" or "open" or "select_entry" or "add_attribute" or "remove_attribute" or "curve_key" or "paste_attribute" or "behavior_parameter"
     or "add_entry" or "duplicate_entry" or "remove_entry" or "paste_entry";
 // Entry-level AI actions run the same code as the window's menus.
 PreviewStructureRequest EntryRequest(PreviewControlRequest job)
@@ -759,6 +766,12 @@ void BeginControl(PreviewControlRequest job)
         case "remove_attribute":
             PreviewControlReports.Int(a,"attributeIndex",0,4096);PreviewControlReports.Long(a,"expectedRevision");RequireNoDraft();AttributeTarget(0);
             job.Phase=1; return;
+        case "behavior_parameter":
+            PreviewControlReports.Int(a,"attributeIndex",0,4096);PreviewControlReports.Long(a,"expectedRevision");
+            if(PreviewControlReports.String(a,"operation") is not ("add" or "remove")) throw new ArgumentException("operation 应为 add 或 remove。");
+            if(PreviewControlReports.String(a,"name") is not {Length:>0}) throw new ArgumentException("缺少参数名 name。");
+            PreviewControlReports.String(a,"value");RequireNoDraft();AttributeTarget(0);
+            job.Phase=1; return;
         case "copy_attribute":
             PreviewControlReports.Int(a,"attributeIndex",0,4096);AttributeTarget(0);
             job.Phase=1; return;
@@ -828,6 +841,24 @@ void BeginControl(PreviewControlRequest job)
         default: job.Fail("unknown_action","未知操作："+job.Action); return;
     }
 }
+// behavior_parameter body: the script class comes from the attribute itself (inspect); its RE4 catalog gives the type, the
+// usual value and the canonical order the backend inserts by (as the MHWs EFX Editor does).
+async Task<JsonObject> BehaviorParameterBody(JsonObject target,string operation,string name,string? value)
+{
+    var (_,inspected)=await editor.SendRawAsync("inspect",new(){["target"]=target.DeepClone()},null);
+    string? Field(string path)=>inspected["fields"]?.AsArray().FirstOrDefault(f=>f?["path"]?.GetValue<string>()==path)?["value"]?.GetValue<string>();
+    string cls=Field("behaviorString") ?? throw new InvalidOperationException("这个属性不是 PtBehavior。");
+    var body=new JsonObject{["target"]=target,["operation"]=operation,["name"]=name};
+    if(operation=="add")
+    {
+        var catalog=PreviewAttributeCatalog.Re4.Behaviors.Find(cls) ?? throw new InvalidOperationException("RE4 里没有这个脚本类的参数目录："+cls);
+        var candidate=catalog.Candidate(name)
+            ?? throw new ArgumentException($"RE4 的 {catalog.ShortName} 没有用过参数 {name}；可选："+string.Join("、",catalog.Candidates!.Select(c=>c.Name)));
+        body["type"]=candidate.Type; body["value"]=value??candidate.Value;
+        body["order"]=new JsonArray(catalog.Candidates!.Select(c=>(JsonNode?)c.Name).ToArray());
+    }
+    return body;
+}
 Task<PreviewEditorState> StartBackend(PreviewControlRequest job,string action,JsonObject body,long? revision)
     => Task.Run(async()=>{var r=await editor.SendRawAsync(action,body,revision);job.BackendReply=r.Reply;copyBuffer=r.Reply["copyBuffer"] as JsonObject;return r.State;});
 Task<PreviewEditorState> StartOpen(JsonObject a)
@@ -874,6 +905,13 @@ void ContinueControl(PreviewControlRequest job)
                 "add_attribute"=>StartBackend(job,"add_attribute",AddAttributeBody(EntryTarget(),PreviewControlReports.String(a,"type")!,PreviewControlReports.String(a,"script")),
                     PreviewControlReports.Long(a,"expectedRevision")),
                 "remove_attribute"=>StartBackend(job,"remove_attribute",new(){["target"]=AttributeTarget(PreviewControlReports.Int(a,"attributeIndex",0,4096))},PreviewControlReports.Long(a,"expectedRevision")),
+                "behavior_parameter"=>Task.Run(async()=>
+                {
+                    var body=await BehaviorParameterBody(AttributeTarget(PreviewControlReports.Int(a,"attributeIndex",0,4096)),PreviewControlReports.String(a,"operation")!,
+                        PreviewControlReports.String(a,"name")!,PreviewControlReports.String(a,"value"));
+                    var r=await editor.SendRawAsync("behavior_parameter",body,PreviewControlReports.Long(a,"expectedRevision"));
+                    job.BackendReply=r.Reply;return r.State;
+                }),
                 "copy_attribute"=>StartBackend(job,"copy_efx",new(){["target"]=AttributeTarget(PreviewControlReports.Int(a,"attributeIndex",0,4096))},null),
                 "paste_attribute"=>StartBackend(job,"paste_efx",PasteBody(a),PreviewControlReports.Long(a,"expectedRevision")),
                 "curve_key"=>StartBackend(job,"curve_key",CurveBody(a),PreviewControlReports.Long(a,"expectedRevision")),

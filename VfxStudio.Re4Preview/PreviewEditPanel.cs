@@ -20,6 +20,9 @@ internal sealed class PreviewEditPanel
     private PropertyRow[] rows=[],filtered=[];
     // Mode handling (FieldSemantics "when"): fields by path for reading draft values, and each mode field's dependants.
     private Dictionary<string,PreviewFieldInfo> byPath=new(StringComparer.Ordinal);
+    // PtBehavior of the shown inspection: its script class and parameter names in file order (null otherwise).
+    private string? behaviorClass;
+    private List<string> behaviorNames=[];
     private IReadOnlyDictionary<string,string[]> controls=new Dictionary<string,string[]>();
     private static readonly Vector4 ModeColor=new(.45f,.78f,1,1);
     /// <summary>One table row: a field, an RGBA8 colour, or sibling components (X/Y/Z, min/max, center/spread)
@@ -76,6 +79,8 @@ internal sealed class PreviewEditPanel
         var names=new Dictionary<string,string>(StringComparer.Ordinal);
         foreach(var f in inspection.Fields)
             if(System.Text.RegularExpressions.Regex.Match(f.Path,@"^(properties\[\d+\])\.behaviorProperty$") is {Success:true} m) names[m.Groups[1].Value]=f.Value;
+        behaviorClass=byPath.GetValueOrDefault("behaviorString")?.Value;
+        behaviorNames=names.OrderBy(n=>int.Parse(System.Text.RegularExpressions.Regex.Match(n.Key,@"\d+").Value)).Select(n=>n.Value).ToList();
         (string Group,string? Label,int Order) Place(string path)
         {
             var m=System.Text.RegularExpressions.Regex.Match(path,@"^(properties\[(\d+)\])\.(.*)$");
@@ -217,6 +222,34 @@ internal sealed class PreviewEditPanel
             if(ImGui.Button("删除")) command=Structure(new("remove_attribute",m.EntryPosition,attribute.Index));
             ImGui.EndDisabled();
             if(ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled)) ImGui.SetTooltip(refusal??"删除这个属性");
+            // PtBehavior: add a parameter RE4 has set on this class (inserted at its canonical place) or remove one.
+            if(attribute.Type=="PtBehavior" && behaviorClass!=null && draft!=null)
+            {
+                var catalog=PreviewAttributeCatalog.Re4.Behaviors.Find(behaviorClass);
+                var missing=catalog?.Candidates?.Where(c=>!behaviorNames.Contains(c.Name)).ToArray()??[];
+                ImGui.SameLine();ImGui.SetNextItemWidth(ImGui.CalcTextSize("添加参数").X+ImGui.GetFrameHeight()*2);
+                ImGui.BeginDisabled(missing.Length==0);
+                if(ImGui.BeginCombo("##添加参数","添加参数",ImGuiComboFlags.HeightLarge))
+                {
+                    foreach(var c in missing)
+                        if(ImGui.Selectable($"{c.Name}  （{c.Type.Replace("Prop","")}，官方 {c.Uses} 次，默认 {c.Value}）"))
+                            command=Structure(new("behavior_parameter",m.EntryPosition,attribute.Index,Type:"add",Parameter:c.Name));
+                    ImGui.EndCombo();
+                }
+                ImGui.EndDisabled();
+                if(ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                    ImGui.SetTooltip(catalog==null?"RE4 没有这个脚本类的参数目录":missing.Length==0?"RE4 用过的参数都已经在了":"按 RE4 官方用过的参数添加，值取官方最常用的值，位置按官方顺序");
+                ImGui.SameLine();ImGui.SetNextItemWidth(ImGui.CalcTextSize("删除参数").X+ImGui.GetFrameHeight()*2);
+                ImGui.BeginDisabled(behaviorNames.Count==0);
+                if(ImGui.BeginCombo("##删除参数","删除参数",ImGuiComboFlags.HeightLarge))
+                {
+                    foreach(var name in behaviorNames)
+                        if(ImGui.Selectable(name)) command=Structure(new("behavior_parameter",m.EntryPosition,attribute.Index,Type:"remove",Parameter:name));
+                    ImGui.EndCombo();
+                }
+                ImGui.EndDisabled();
+                if(ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled)) ImGui.SetTooltip("删掉的参数回到脚本默认值");
+            }
         }
         ImGui.SameLine();
         if(ImGui.Button("刷新") && state!=null) {draft=null;command=Inspect(state);}

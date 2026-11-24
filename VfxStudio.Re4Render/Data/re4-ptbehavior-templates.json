@@ -21,6 +21,134 @@
           "value": "3"
         }
       ],
+      "candidates": [
+        {
+          "name": "Intensity",
+          "type": "PropFloat",
+          "uses": 389,
+          "value": "5000"
+        },
+        {
+          "name": "IntensityAmplitudeMin",
+          "type": "PropFloat",
+          "uses": 6,
+          "value": "0.5"
+        },
+        {
+          "name": "BounceIntensity",
+          "type": "PropFloat",
+          "uses": 1,
+          "value": "1"
+        },
+        {
+          "name": "UsingSameIntensity",
+          "type": "PropBool",
+          "uses": 18,
+          "value": "1"
+        },
+        {
+          "name": "IntensityAmplitudeMax",
+          "type": "PropFloat",
+          "uses": 26,
+          "value": "0.35"
+        },
+        {
+          "name": "IntensityAmplitudeChangeFrameMin",
+          "type": "PropFloat",
+          "uses": 26,
+          "value": "10"
+        },
+        {
+          "name": "IntensityAmplitudeChangeFrameMax",
+          "type": "PropFloat",
+          "uses": 26,
+          "value": "30"
+        },
+        {
+          "name": "Radius",
+          "type": "PropFloat",
+          "uses": 297,
+          "value": "1"
+        },
+        {
+          "name": "ReferenceEffectiveRange",
+          "type": "PropFloat",
+          "uses": 312,
+          "value": "3"
+        },
+        {
+          "name": "UseCustomAttenuation",
+          "type": "PropBool",
+          "uses": 2,
+          "value": "1"
+        },
+        {
+          "name": "ShadowEnable",
+          "type": "PropBool",
+          "uses": 36,
+          "value": "0"
+        },
+        {
+          "name": "ShadowVariance",
+          "type": "PropFloat",
+          "uses": 6,
+          "value": "0.03"
+        },
+        {
+          "name": "ShadowBias",
+          "type": "PropFloat",
+          "uses": 2,
+          "value": "1"
+        },
+        {
+          "name": "ShadowDepthBias",
+          "type": "PropFloat",
+          "uses": 1,
+          "value": "0.005"
+        },
+        {
+          "name": "ShadowSlopeBias",
+          "type": "PropFloat",
+          "uses": 1,
+          "value": "1"
+        },
+        {
+          "name": "MinRoughness",
+          "type": "PropFloat",
+          "uses": 36,
+          "value": "1"
+        },
+        {
+          "name": "_BackGroundShadowEnable",
+          "type": "PropBool",
+          "uses": 1,
+          "value": "1"
+        },
+        {
+          "name": "AOEfficiency",
+          "type": "PropFloat",
+          "uses": 27,
+          "value": "0.8"
+        },
+        {
+          "name": "ForceShadowCacheEnable",
+          "type": "PropBool",
+          "uses": 10,
+          "value": "0"
+        },
+        {
+          "name": "AttenuationStartDistance",
+          "type": "PropFloat",
+          "uses": 2,
+          "value": "0.1"
+        },
+        {
+          "name": "_ShadowNearPlane",
+          "type": "PropFloat",
+          "uses": 1,
+          "value": "0.26"
+        }
+      ],
       "carrier": {
         "attributes": [
           "Transform3D",
@@ -60,6 +188,56 @@
         {
           "name": "CameraTarget",
           "type": "PropEnum",
+          "value": "1"
+        }
+      ],
+      "candidates": [
+        {
+          "name": "TranslationXRange",
+          "type": "PropRange",
+          "uses": 8,
+          "value": "0,0.03"
+        },
+        {
+          "name": "Period",
+          "type": "PropRangeI",
+          "uses": 1,
+          "value": "1,0"
+        },
+        {
+          "name": "TranslationYRange",
+          "type": "PropRange",
+          "uses": 8,
+          "value": "0,0.01"
+        },
+        {
+          "name": "UseDistanceAttenuation",
+          "type": "PropBool",
+          "uses": 27,
+          "value": "1"
+        },
+        {
+          "name": "DistanceAttenuationStart",
+          "type": "PropFloat",
+          "uses": 27,
+          "value": "10"
+        },
+        {
+          "name": "DistanceAttenuationEnd",
+          "type": "PropFloat",
+          "uses": 27,
+          "value": "40"
+        },
+        {
+          "name": "UseAngleAttenuation",
+          "type": "PropBool",
+          "uses": 21,
+          "value": "1"
+        },
+        {
+          "name": "CameraTarget",
+          "type": "PropEnum",
+          "uses": 27,
           "value": "1"
         }
       ],
@@ -130,6 +308,230 @@
           "value": "255,255,255,255"
         }
       ],
+      "candidates": [
+        {
+          "name": "DecalPrefab",
+          "type": "PropPrefab",
+          "uses": 1008,
+          "value": "RE_ENGINE_LIBRARY/VFX_Library/Decal/Blood_BDC/decal_capcom_blood_bdc_bloodstain_00.pfb"
+        },
+        {
+          "name": "OverridePriority",
+          "type": "PropBool",
+          "uses": 12,
+          "value": "1"
+        },
+        {
+          "name": "Priority",
+          "type": "PropEnum",
+          "uses": 11,
+          "value": "7"
+        },
+        {
+          "name": "DecalDirection",
+          "type": "PropEnum",
+          "uses": 1002,
+          "value": "3"
+        },
+        {
+          "name": "DecalUpDirection",
+          "type": "PropEnum",
+          "uses": 1002,
+          "value": "1"
+        },
+        {
+          "name": "RandomRollRange",
+          "type": "PropFloat",
+          "uses": 767,
+          "value": "180"
+        },
+        {
+          "name": "ProjectionShape",
+          "type": "PropEnum",
+          "uses": 889,
+          "value": "0"
+        },
+        {
+          "name": "Extent",
+          "type": "PropVec3",
+          "uses": 975,
+          "value": "1,1,1"
+        },
+        {
+          "name": "ScaleXY",
+          "type": "PropRange",
+          "uses": 752,
+          "value": "0.35,0.20000002"
+        },
+        {
+          "name": "NoUseSearchTerrain",
+          "type": "PropBool",
+          "uses": 6,
+          "value": "0"
+        },
+        {
+          "name": "SearchTerrainDistance",
+          "type": "PropFloat",
+          "uses": 855,
+          "value": "3"
+        },
+        {
+          "name": "BaseColorMod",
+          "type": "PropColor",
+          "uses": 986,
+          "value": "113,3,7,255"
+        },
+        {
+          "name": "EmissiveIntensity",
+          "type": "PropFloat",
+          "uses": 35,
+          "value": "17293.24"
+        },
+        {
+          "name": "NormalMod",
+          "type": "PropFloat",
+          "uses": 50,
+          "value": "0.85"
+        },
+        {
+          "name": "AlphaMaskRangeAnimType",
+          "type": "PropEnum",
+          "uses": 25,
+          "value": "0"
+        },
+        {
+          "name": "FlowTexture",
+          "type": "PropTexture",
+          "uses": 6,
+          "value": "_Chainsaw/VFX/Texture/TEX_Stage/TEX_st60/TEX_st60_000/TEX_0015_st60_100_nami_0003_MSK2.tex"
+        },
+        {
+          "name": "Strength",
+          "type": "PropFloat",
+          "uses": 6,
+          "value": "0.1"
+        },
+        {
+          "name": "Speed",
+          "type": "PropFloat",
+          "uses": 6,
+          "value": "0.1"
+        },
+        {
+          "name": "EmissiveMod",
+          "type": "PropColor",
+          "uses": 697,
+          "value": "255,255,255,255"
+        },
+        {
+          "name": "SetParticleTransform",
+          "type": "PropBool",
+          "uses": 12,
+          "value": "1"
+        },
+        {
+          "name": "AlphaMaskRange",
+          "type": "PropVec2",
+          "uses": 126,
+          "value": "0.5,0.5"
+        },
+        {
+          "name": "Alpha0",
+          "type": "PropVec2",
+          "uses": 43,
+          "value": "1,1"
+        },
+        {
+          "name": "Alpha1",
+          "type": "PropVec2",
+          "uses": 43,
+          "value": "0,0"
+        },
+        {
+          "name": "EnableUVRect",
+          "type": "PropBool",
+          "uses": 34,
+          "value": "1"
+        },
+        {
+          "name": "UVOffset",
+          "type": "PropVec2",
+          "uses": 34,
+          "value": "0.6,0.66"
+        },
+        {
+          "name": "UVScale",
+          "type": "PropVec2",
+          "uses": 34,
+          "value": "-3,3"
+        },
+        {
+          "name": "OBBScalarAdd",
+          "type": "PropRange",
+          "uses": 57,
+          "value": "0.0025,0"
+        },
+        {
+          "name": "NormalUVOffset",
+          "type": "PropVec2",
+          "uses": 34,
+          "value": "0.6,0.66"
+        },
+        {
+          "name": "NormalUVScale",
+          "type": "PropVec2",
+          "uses": 34,
+          "value": "-3,3"
+        },
+        {
+          "name": "PyramidAngle",
+          "type": "PropRange",
+          "uses": 18,
+          "value": "50,0"
+        },
+        {
+          "name": "SpeedCoefficient",
+          "type": "PropFloat",
+          "uses": 6,
+          "value": "1"
+        },
+        {
+          "name": "FollowEffect",
+          "type": "PropEnum",
+          "uses": 12,
+          "value": "1"
+        },
+        {
+          "name": "PyramidNearClip",
+          "type": "PropFloat",
+          "uses": 18,
+          "value": "0.001"
+        },
+        {
+          "name": "BaseColorModExternName",
+          "type": "PropString",
+          "uses": 3,
+          "value": ""
+        },
+        {
+          "name": "OBBScalarCoef",
+          "type": "PropRange",
+          "uses": 57,
+          "value": "0.995,0"
+        },
+        {
+          "name": "Distortion",
+          "type": "PropFloat",
+          "uses": 11,
+          "value": "1"
+        },
+        {
+          "name": "PyramidFarClip",
+          "type": "PropFloat",
+          "uses": 18,
+          "value": "1"
+        }
+      ],
       "carrier": {
         "attributes": [
           "Transform3D",
@@ -164,6 +566,32 @@
         {
           "name": "PowerScale",
           "type": "PropFloat",
+          "value": "0.1"
+        }
+      ],
+      "candidates": [
+        {
+          "name": "Radius",
+          "type": "PropFloat",
+          "uses": 21,
+          "value": "0.75"
+        },
+        {
+          "name": "Length",
+          "type": "PropFloat",
+          "uses": 21,
+          "value": "30"
+        },
+        {
+          "name": "CuttedDensity",
+          "type": "PropFloat",
+          "uses": 20,
+          "value": "0"
+        },
+        {
+          "name": "PowerScale",
+          "type": "PropFloat",
+          "uses": 21,
           "value": "0.1"
         }
       ],
@@ -202,6 +630,26 @@
           "value": "10000000"
         }
       ],
+      "candidates": [
+        {
+          "name": "Radius",
+          "type": "PropFloat",
+          "uses": 5,
+          "value": "3"
+        },
+        {
+          "name": "Length",
+          "type": "PropFloat",
+          "uses": 5,
+          "value": "3"
+        },
+        {
+          "name": "Pressure",
+          "type": "PropFloat",
+          "uses": 5,
+          "value": "10000000"
+        }
+      ],
       "carrier": {
         "attributes": [
           "FixRandomGenerator",
@@ -229,6 +677,140 @@
           "name": "Intensity",
           "type": "PropFloat",
           "value": "5000"
+        }
+      ],
+      "candidates": [
+        {
+          "name": "LensflarePrefab",
+          "type": "PropPrefab",
+          "uses": 41,
+          "value": "RE_ENGINE_LIBRARY/VFX_Library/Lensflare/LensflarePrefab/lensflare_capcom_asset_0001.pfb"
+        },
+        {
+          "name": "Intensity",
+          "type": "PropFloat",
+          "uses": 41,
+          "value": "5000"
+        },
+        {
+          "name": "EnableOcclusion",
+          "type": "PropBool",
+          "uses": 10,
+          "value": "0"
+        },
+        {
+          "name": "OccludeSampleNum",
+          "type": "PropUint",
+          "uses": 10,
+          "value": "1"
+        },
+        {
+          "name": "OccludeSampleRadius",
+          "type": "PropFloat",
+          "uses": 10,
+          "value": "0"
+        },
+        {
+          "name": "DrawOccludeRadius",
+          "type": "PropBool",
+          "uses": 1,
+          "value": "1"
+        },
+        {
+          "name": "EnableFadeByAngle",
+          "type": "PropBool",
+          "uses": 1,
+          "value": "1"
+        },
+        {
+          "name": "RotationOrder",
+          "type": "PropNativeEnum",
+          "uses": 1,
+          "value": "4"
+        },
+        {
+          "name": "AxisType",
+          "type": "PropNativeEnum",
+          "uses": 1,
+          "value": "2"
+        },
+        {
+          "name": "FadeConeAngle",
+          "type": "PropFloat",
+          "uses": 1,
+          "value": "5"
+        },
+        {
+          "name": "FadeSpreadAngle",
+          "type": "PropFloat",
+          "uses": 1,
+          "value": "30"
+        },
+        {
+          "name": "DrawFadeByAngle",
+          "type": "PropBool",
+          "uses": 1,
+          "value": "1"
+        },
+        {
+          "name": "EnableFadeByDistance",
+          "type": "PropBool",
+          "uses": 10,
+          "value": "1"
+        },
+        {
+          "name": "FadeNearStart",
+          "type": "PropFloat",
+          "uses": 10,
+          "value": "0"
+        },
+        {
+          "name": "FadeNearEnd",
+          "type": "PropFloat",
+          "uses": 10,
+          "value": "0.05"
+        },
+        {
+          "name": "FadeFarStart",
+          "type": "PropFloat",
+          "uses": 10,
+          "value": "0.05"
+        },
+        {
+          "name": "FadeFarEnd",
+          "type": "PropFloat",
+          "uses": 10,
+          "value": "4"
+        },
+        {
+          "name": "EnableOverAreaFade",
+          "type": "PropBool",
+          "uses": 9,
+          "value": "0"
+        },
+        {
+          "name": "OverAreaFadeStartRadius",
+          "type": "PropFloat",
+          "uses": 9,
+          "value": "0"
+        },
+        {
+          "name": "DrawFadeByDistance",
+          "type": "PropBool",
+          "uses": 1,
+          "value": "1"
+        },
+        {
+          "name": "OverAreaFadeEndRadius",
+          "type": "PropFloat",
+          "uses": 9,
+          "value": "0"
+        },
+        {
+          "name": "FadeByAlphaRate",
+          "type": "PropFloat",
+          "uses": 1,
+          "value": "0"
         }
       ],
       "carrier": {
@@ -262,6 +844,92 @@
           "name": "ReferenceEffectiveRange",
           "type": "PropFloat",
           "value": "20"
+        }
+      ],
+      "candidates": [
+        {
+          "name": "Intensity",
+          "type": "PropFloat",
+          "uses": 147,
+          "value": "100000"
+        },
+        {
+          "name": "IntensityAmplitudeMin",
+          "type": "PropFloat",
+          "uses": 6,
+          "value": "0"
+        },
+        {
+          "name": "UsingSameIntensity",
+          "type": "PropBool",
+          "uses": 23,
+          "value": "0"
+        },
+        {
+          "name": "VolumetricScatteringIntensity",
+          "type": "PropFloat",
+          "uses": 17,
+          "value": "0.5"
+        },
+        {
+          "name": "IntensityAmplitudeMax",
+          "type": "PropFloat",
+          "uses": 7,
+          "value": "0"
+        },
+        {
+          "name": "IntensityAmplitudeChangeFrameMin",
+          "type": "PropFloat",
+          "uses": 6,
+          "value": "0"
+        },
+        {
+          "name": "IntensityAmplitudeChangeFrameMax",
+          "type": "PropFloat",
+          "uses": 7,
+          "value": "0"
+        },
+        {
+          "name": "Radius",
+          "type": "PropFloat",
+          "uses": 145,
+          "value": "1"
+        },
+        {
+          "name": "ReferenceEffectiveRange",
+          "type": "PropFloat",
+          "uses": 118,
+          "value": "6"
+        },
+        {
+          "name": "UseCustomAttenuation",
+          "type": "PropBool",
+          "uses": 20,
+          "value": "1"
+        },
+        {
+          "name": "ShadowEnable",
+          "type": "PropBool",
+          "uses": 2,
+          "value": "1"
+        },
+        {
+          "name": "AttenuationStartDistance",
+          "type": "PropFloat",
+          "uses": 20,
+          "value": "0.1"
+        },
+        {
+          "name": "ShadowVariance",
+          "type": "PropFloat",
+          "uses": 1,
+          "value": "0.05"
+        },
+        {
+          "name": "MinRoughness",
+          "type": "PropFloat",
+          "uses": 29,
+          "value": "1"
         }
       ],
       "carrier": {
@@ -301,6 +969,32 @@
           "value": "0"
         }
       ],
+      "candidates": [
+        {
+          "name": "MaterialName",
+          "type": "PropString",
+          "uses": 10,
+          "value": "sm84_786_C_Mat__Env_Default"
+        },
+        {
+          "name": "VariableName",
+          "type": "PropString",
+          "uses": 10,
+          "value": "Blood_Rate"
+        },
+        {
+          "name": "StartRate",
+          "type": "PropFloat",
+          "uses": 10,
+          "value": "0"
+        },
+        {
+          "name": "EndRate",
+          "type": "PropFloat",
+          "uses": 10,
+          "value": "1"
+        }
+      ],
       "carrier": {
         "attributes": [
           "Transform3D",
@@ -326,6 +1020,62 @@
           "name": "LookAtType",
           "type": "PropEnum",
           "value": "0"
+        }
+      ],
+      "candidates": [
+        {
+          "name": "Priority",
+          "type": "PropInt",
+          "uses": 11,
+          "value": "1"
+        },
+        {
+          "name": "ColorRate",
+          "type": "PropFloat",
+          "uses": 8,
+          "value": "1"
+        },
+        {
+          "name": "SharpRange",
+          "type": "PropFloat",
+          "uses": 11,
+          "value": "100"
+        },
+        {
+          "name": "BlurPower",
+          "type": "PropFloat",
+          "uses": 91,
+          "value": "10"
+        },
+        {
+          "name": "OccludeScale",
+          "type": "PropFloat",
+          "uses": 28,
+          "value": "0.8"
+        },
+        {
+          "name": "LookAtType",
+          "type": "PropEnum",
+          "uses": 69,
+          "value": "0"
+        },
+        {
+          "name": "EnableFadeDistance",
+          "type": "PropBool",
+          "uses": 12,
+          "value": "1"
+        },
+        {
+          "name": "FadeStartDistance",
+          "type": "PropFloat",
+          "uses": 12,
+          "value": "8.6"
+        },
+        {
+          "name": "FadeEndDistance",
+          "type": "PropFloat",
+          "uses": 12,
+          "value": "9"
         }
       ],
       "carrier": {
@@ -378,6 +1128,80 @@
           "name": "SearchDistance",
           "type": "PropFloat",
           "value": "3"
+        }
+      ],
+      "candidates": [
+        {
+          "name": "MarkSystemkAssetID",
+          "type": "PropUint",
+          "uses": 404,
+          "value": "1"
+        },
+        {
+          "name": "MarkOrderDataID",
+          "type": "PropUint",
+          "uses": 401,
+          "value": "18"
+        },
+        {
+          "name": "MarkOrderDataIndex",
+          "type": "PropUint",
+          "uses": 265,
+          "value": "0"
+        },
+        {
+          "name": "OrderStamp",
+          "type": "PropBool",
+          "uses": 15,
+          "value": "1"
+        },
+        {
+          "name": "OrderDecal",
+          "type": "PropBool",
+          "uses": 248,
+          "value": "0"
+        },
+        {
+          "name": "ScaleXY",
+          "type": "PropRange",
+          "uses": 346,
+          "value": "1,0"
+        },
+        {
+          "name": "RandomRollRange",
+          "type": "PropFloat",
+          "uses": 117,
+          "value": "0"
+        },
+        {
+          "name": "RecordType",
+          "type": "PropUint",
+          "uses": 1,
+          "value": "0"
+        },
+        {
+          "name": "Extent",
+          "type": "PropVec3",
+          "uses": 351,
+          "value": "1,1,1"
+        },
+        {
+          "name": "SearchDistance",
+          "type": "PropFloat",
+          "uses": 400,
+          "value": "1"
+        },
+        {
+          "name": "DecalSearchTerrainDistance",
+          "type": "PropFloat",
+          "uses": 10,
+          "value": "1.5"
+        },
+        {
+          "name": "ChannelMask",
+          "type": "PropEnum",
+          "uses": 11,
+          "value": "2"
         }
       ],
       "carrier": {
@@ -437,6 +1261,56 @@
           "value": "20"
         }
       ],
+      "candidates": [
+        {
+          "name": "Intensity",
+          "type": "PropFloat",
+          "uses": 1,
+          "value": "20000"
+        },
+        {
+          "name": "UsingSameIntensity",
+          "type": "PropBool",
+          "uses": 1,
+          "value": "1"
+        },
+        {
+          "name": "Radius",
+          "type": "PropFloat",
+          "uses": 1,
+          "value": "1"
+        },
+        {
+          "name": "ReferenceEffectiveRange",
+          "type": "PropFloat",
+          "uses": 1,
+          "value": "50"
+        },
+        {
+          "name": "ShadowEnable",
+          "type": "PropBool",
+          "uses": 1,
+          "value": "1"
+        },
+        {
+          "name": "Falloff",
+          "type": "PropFloat",
+          "uses": 1,
+          "value": "1"
+        },
+        {
+          "name": "Spread",
+          "type": "PropFloat",
+          "uses": 1,
+          "value": "15"
+        },
+        {
+          "name": "Cone",
+          "type": "PropFloat",
+          "uses": 1,
+          "value": "20"
+        }
+      ],
       "carrier": {
         "attributes": [
           "Transform3D",
@@ -467,6 +1341,26 @@
         {
           "name": "MovingPower",
           "type": "PropFloat",
+          "value": "1"
+        }
+      ],
+      "candidates": [
+        {
+          "name": "Radius",
+          "type": "PropFloat",
+          "uses": 27,
+          "value": "0.2"
+        },
+        {
+          "name": "Length",
+          "type": "PropFloat",
+          "uses": 23,
+          "value": "0"
+        },
+        {
+          "name": "MovingPower",
+          "type": "PropFloat",
+          "uses": 27,
           "value": "1"
         }
       ],
@@ -504,6 +1398,32 @@
         {
           "name": "FixedPosition",
           "type": "PropBool",
+          "value": "1"
+        }
+      ],
+      "candidates": [
+        {
+          "name": "TriggerId",
+          "type": "PropUint",
+          "uses": 20,
+          "value": "3981851372"
+        },
+        {
+          "name": "MaxDistance",
+          "type": "PropFloat",
+          "uses": 19,
+          "value": "20"
+        },
+        {
+          "name": "MaxParticleSounds",
+          "type": "PropUint",
+          "uses": 20,
+          "value": "3"
+        },
+        {
+          "name": "FixedPosition",
+          "type": "PropBool",
+          "uses": 20,
           "value": "1"
         }
       ],
