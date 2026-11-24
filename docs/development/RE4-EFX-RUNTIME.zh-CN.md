@@ -1430,6 +1430,40 @@ Action 指 EFX 文件级 Action 列表（C# `EfxFile.Actions`）中的一项：�
 
 Action 节点（PlayEmitter 等）如何使用实例矩阵、释放槽对子发射器做什么，未追踪。
 
+### 5.4 PtBehavior（粒子脚本）
+
+PtBehavior 把一个引擎脚本类（`behaviorString`，如 `via.effect.script.EffectDecal`、`chainsaw.EffectLight1500lm`）挂到 entry 上，参数表按名字写进脚本的同名字段。结构与 MHWI 的 PTBEHAVIOR 同型（类型名 + 该类型参数的稀疏有序子集），区别是 RE4 每个参数带 UTF-8 名字和类型码（类型码 = 字段在 re4.exe 类型库中的类型），MHWI 用名字哈希。
+
+| 项 | 内容 | 状态 | 依据 |
+|---|---|---|---|
+| 加载 | 槽 5（3d3aba0）：首个 dword（C# `unkn1`）存入属性 `+0x20`；脚本名经资源查找 39ef530 解析，句柄存 `+0x28` | 已确认 | re4.exe 3d3aba0 |
+| `unkn1` | 语料 2190/2193 为 2，WaterObstacle 3 个、Fluid2DObstacle 1 个为 3；构建器 3d3ad70 不读它 | 作用未读 | 语料；re4.exe 3d3ad70 |
+| 调用时机 | 逐粒子循环第 7 步，3d05350 之后每个存活粒子每 tick 调用 3d3a760；击杀检查（第 1 步）也调用一次。3d3a760 遍历 `ctx+0x278` 的脚本链表，对每个节点调 3d38470 | 已确认 | ORD 3d09250、3d08dd1 |
+| 回调 | 脚本基类的 OnUpdate、OnUpdateParticle、OnTerminate、OnFinish；`UpdateType`（`via.attribute.EffectEventInfoAttribute`）选择更新方式 | 名字已确认，选择规则未读 | 字符串 7a0c808..7a0c958 |
+
+3d38470 先把粒子与发射器状态写进脚本的下列字段（脚本类没有声明的字段跳过，描述符 `+0xb8 + 8·i` 按此顺序），再调用脚本方法（描述符 `+0xa8`）：
+
+| 字段 | 写入值 | 状态 |
+|---|---|---|
+| `_ActiveParticleCount` | 存活粒子数 | 已确认（推定为计数） |
+| `_MaxParticleNum` | 粒子上限 | 名字 |
+| `_EmitterPosition` | 发射器世界矩阵的平移（`[ctx+0x120]+0xec..0xf4`） | 已确认 |
+| `_WorldMatrix` | 发射器世界矩阵（16 float，`+0xbc..0xf8`） | 已确认 |
+| `_GameObject` | 宿主游戏对象 | 已确认 |
+| `_ParticleDirection` | 由粒子速度（`+0x5c`，`[p+6]` 位 0 时加 `+0x68`）与参考矩阵求出的朝向 | 部分待确认 |
+| `_ParticleWorldMatrix` | 粒子世界矩阵（位置 3dfd040 / 3dfcf60、尺寸 `+0x80`、参考矩阵 P、旋转 3d13e50） | 部分待确认 |
+| `_BaseColor` | 粒子 RGB（`+0x4c`），A = 粒子 A × 寿命字节 / 255 | 已确认 |
+| `_ParticleColor` | 效果实例颜色（`[ctx+0xf0]+0x88`）× 发射器颜色（E `+0x134`，EmitterColor 写它）×（E `+0x170` 位 31 时 E `+0x138`）× `_BaseColor`，逐字节相乘 / 255；设置 `+0xeba` 置位时直接等于 `_BaseColor` | 已确认 |
+| `_ParticleLife` | 粒子 `+0x54`：寿命进度 0→1（实测 4 帧寿命依次 0、0.25、0.5、0.75） | 已确认 |
+| `_ParticleIndex` | 粒子槽号 | 已确认 |
+| `_EnableUpdate`、`_EnableParticleUpdate` | 不由此函数写入（脚本侧开关） | 名字 |
+| `_ParticleLifeState` | `([p+4] >> 3) & 0xF`，Life 阶段 | 已确认 |
+| `_LastSpawned` | `[p+4]` 位 17（最后一批），Spawn 循环次数为无限时恒 0 | 已确认 |
+| `_ActionBehavior` | 未读 | — |
+| `_UVRect` | 粒子 `+0xc4..+0xd3`：UVSequence 当前格的矩形（EffectDecal 的 EnableUVRect 用它） | 已确认 |
+
+各脚本类拿这些字段做什么（例如光源颜色是否取 `_ParticleColor`、强度是否乘寿命 alpha）在各自的脚本代码里，未读。已实机确认的只有 EffectDecal：贴花随载体淡出、载体死亡贴花消失、EnableUVRect 取载体当前 UV 格（skill `re-efx-authoring/references/decals.md`）。
+
 ---
 
 ## 6. Expression
