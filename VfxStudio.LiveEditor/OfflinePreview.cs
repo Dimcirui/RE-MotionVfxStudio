@@ -28,7 +28,7 @@ internal sealed partial class EditorEngine
             position = candidates[0].index;
         }
         if (position < 0 || position >= file.Entries.Count || !Previewable(file.Entries[position]))
-            throw new NotSupportedException("请选择一个 Billboard3D、Polygon、Billboard2D、RibbonFollow、RibbonLength、RibbonFixEnd、PolygonTrail 或 NoDraw 发射器。");
+            throw new NotSupportedException("请选择一个 Billboard3D、Polygon、Billboard2D、RibbonFollow、RibbonLength、RibbonFixEnd、PolygonTrail、Mesh 或 NoDraw 发射器。");
         offlinePreviewEntry = position;
         offlinePreviewEntryId = file.Entries[position].index;
         offlinePreviewDocument = documentSessionKey;
@@ -39,7 +39,7 @@ internal sealed partial class EditorEngine
     private static bool Previewable(EFXEntry entry) =>
         // NoDraw draws nothing itself, but its particles fire child Actions the preview runs; it can be the edited entry.
         entry.TypeAttribute is EFXAttributeTypeNoDraw or EFXAttributeTypeBillboard3D or EFXAttributeTypePolygon or EFXAttributeTypeBillboard2D or EFXAttributeTypeRibbonFollow or EFXAttributeTypeRibbonLength
-            or EFXAttributeTypePolygonTrail || entry.TypeAttribute is EFXAttributeTypeRibbonFixEnd { ShapeDivision: >= 2 };
+            or EFXAttributeTypePolygonTrail or EFXAttributeTypeMeshV2 || entry.TypeAttribute is EFXAttributeTypeRibbonFixEnd { ShapeDivision: >= 2 };
 
     private void AttachOfflinePreview(JsonObject response, bool force)
     {

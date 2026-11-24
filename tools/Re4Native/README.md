@@ -57,6 +57,8 @@ python -I -X utf8 -u pe_image.py "<re4.exe>" 3d1d830 80     # 反汇编一个 RV
 | `world.py` | 平地碰撞查询池（替代 d62f8e0）、PtLife 触发记录器、Action 执行记录器、替身 Action 表 |
 | `exp_world.py` | PtCollision / PtColliderAction 碰平地，PtLife 按阶段触发 |
 | `exp_expr.py` | Transform3DExpression：表达式虚拟机求值，结果按 BitNames 落到槽位 |
+| `exp_mesh_rotation.py` | TypeMesh 朝向的两个引擎函数：3d13e50（欧拉角 → 矩阵）对照 Polygon 四元数规则的矩阵，dfbc10（四元数 → 矩阵）对照 System.Numerics |
+| `exp_mesh.py` | TypeMesh 部件动画：类型块 +0x100 的逐粒子记录对照规格 §4.3.11（PlayType 2 播完死亡、PlayType 3 停在末部件、PlaySpeedCoef 每 tick 相乘） |
 
 ## 结果
 
@@ -75,6 +77,7 @@ python -I -X utf8 -u pe_image.py "<re4.exe>" 3d1d830 80     # 反汇编一个 RV
 | 条目解析 | 4 个语料条目（Billboard3D 两个、Mesh、RibbonLength）全部由引擎加载器读完，读到的末尾正好是下一个条目的开头 | 已确认 |
 | 发射器构造 | 3d06440 在一块内存上原地构造 E：E[0] = 条目对象，属性块依次由槽 15 构建，粒子数组与逐粒子附加数据随后；FixRandomGenerator 的种子进入 E+0x110 | 已确认 |
 | 推进 | 3d09690（状态机 → N 累加 → 3d08480）连续运行 120 tick，4 个条目都不故障。Mesh 与 RibbonLength 各 1 个粒子 | 已确认 |
+| TypeMesh 部件 | 两个语料条目（MaxPartsNum 28 / 19）共 350 个粒子步，部件索引与存活位逐步一致；部件上限读属性 +0x58，空网格替身足够。网格渲染实例的逐粒子数组（+0x1108）指向一块共享缓冲，否则带 +0x15a / +0xc2 的条目在 3d3103f 写空指针 | 已确认 |
 | 出生时刻 | 首批在 tick `max(D,1)`，之后每 `max(I,1)` 帧一批（I = 30：tick 1、31、61、91）；可变 dt 下按整数帧 N 倒数 | 已确认 |
 | 低帧率补发 | n = 3、IntervalFrame 0、LoopNum 3：同一 tick 出 3 个粒子，之后不再出生。批数 k = max(1, ⌊n/(I+1)⌋) 同时消耗 k 轮 LoopNum | 已确认（消耗 k 轮为观测结果） |
 | E.state | 本批粒子看到 `xs(xs(seed))`（重启置 xs(seed)，出批前推进一次） | 已确认 |

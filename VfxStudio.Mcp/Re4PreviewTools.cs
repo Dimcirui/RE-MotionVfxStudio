@@ -10,7 +10,7 @@ internal sealed class Re4PreviewToolSet : IToolSet
     public string ServerName => "motionvfx-re4-preview";
     public string Title => "RE4 preview";
     public string Instructions =>
-        "Drive the RE4 EFX offline preview window. It simulates every supported CPU Billboard3D, Polygon, Billboard2D, RibbonFollow and RibbonLength entry of one EFX file by running re4.exe particle code natively and renders them; one entry at a time is the edited one (select_entry). " +
+        "Drive the RE4 EFX offline preview window. It simulates every supported CPU Billboard3D, Polygon, Billboard2D, RibbonFollow, RibbonLength, RibbonFixEnd, PolygonTrail and Mesh entry of one EFX file (NoDraw entries run without drawing when they fire child Actions) by running re4.exe particle code natively and renders them; one entry at a time is the edited one (select_entry). " +
         "it never touches the running game or writes the game directory. Workflow: status (or launch if no window is running), open, inspect to list attributes, " +
         "inspect with attributeIndex to read field paths, set_fields with the current revision as expectedRevision, then frame or screenshot at a tick to check the result; " +
         "undo/redo with expectedRevision; save_copy. Structure: attribute_types, add_attribute, remove_attribute, copy_attribute then paste_attribute (the copy survives open, so attributes can move between files), curve_key for keys on existing curves, and add_entry, duplicate_entry, remove_entry, copy_entry, paste_entry for whole entries; " +
@@ -48,7 +48,7 @@ internal sealed class Re4PreviewToolSet : IToolSet
             new() { ["fixture"] = Fixture(), ["path"] = Path(), ["entryPosition"] = Integer("Zero-based position in the file's entry list."),
                 ["entryId"] = Integer("Native entry index field."), ["offset"] = Offset(),
                 ["discardUnsaved"] = Boolean("Required true when the current document has unsaved edits that should be dropped.") }, []),
-        Define("select_entry", "Make another entry of the open file the edited one (inspect, set_fields and structure tools act on it). The whole file stays loaded, so the preview neither reloads nor moves in time. Billboard3D, Polygon, Billboard2D, RibbonFollow and RibbonLength entries can be selected; status.preview.entries lists them.",
+        Define("select_entry", "Make another entry of the open file the edited one (inspect, set_fields and structure tools act on it). The whole file stays loaded, so the preview neither reloads nor moves in time. Billboard3D, Polygon, Billboard2D, RibbonFollow, RibbonLength, RibbonFixEnd, PolygonTrail, Mesh and NoDraw entries can be selected; status.preview.entries lists them, with the reason for each entry that is not shown.",
             new() { ["entryPosition"] = Integer("Entry position from status.preview.entries."), }, ["entryPosition"]),
         Define("inspect", "Without attributeIndex: list the selected emitter's attributes. With attributeIndex: return its fields (path, type, value, editable, reason, choices), color groups and curves (path, channels, keys). Use the exact paths for set_fields and curve_key.",
             new() { ["attributeIndex"] = Integer("Attribute index from the attribute list.", 0, 4096) }, [], true, true),

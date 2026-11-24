@@ -746,7 +746,7 @@ RE4 文件没有 RotationDelayFrame；独立属性 RotateAnimDelayFrame 未追�
 门控：粒子 [p+4] & 0x800 或 ctx2[+0x18] & 4 时整段跳过
 ```
 
-角度槽 = Type 初始角 + 累积自转。读取方：Billboard3D 的滚转 = 槽 X + 槽 Y（粒子标志 0x2000 时再加 +0xa8），Z 不用；Mesh 用 (X, Y, Z) 按粒子 +4 低 3 位的顺序组成欧拉角，某标志下 Y、Z 取反（3d29776）；Polygon / NoDraw / Billboard2D 的读取未追踪。负 Coef 在 60 fps 下逐帧翻号，其他帧率得 NaN。状态：已确认（ROT 3d1cb60），列出的未追踪读取方除外。
+角度槽 = Type 初始角 + 累积自转。读取方：Billboard3D 的滚转 = 槽 X + 槽 Y（粒子标志 0x2000 时再加 +0xa8），Z 不用；Mesh 用 (X, Y, Z)（粒子标志 0x2000 时再加 +0xa8..+0xb0）按粒子 +4 低 3 位的顺序组成欧拉角，发射器镜像（E+0x16c 位 7）时 Y、Z 取反（3d296f0 → 3d13e50，矩阵与 Polygon 四元数规则一致）；Polygon / NoDraw / Billboard2D 的读取未追踪。负 Coef 在 60 fps 下逐帧翻号，其他帧率得 NaN。状态：已确认（ROT 3d1cb60），列出的未追踪读取方除外。
 
 ### 3.5 Transform3DModifier（发射器变换的随机起始值与速度）
 
@@ -1157,17 +1157,21 @@ UV：点 +0x40 = 累计弧长 / 总长（默认整条贴一次）
 |---|---|---|---|
 | `Flags` | 位 1：FrontAxis 对准运动方向（带 `min(dt·k,1)` 平滑；位 2 跳过该路径）；位 24：部件按顺序取；位 8-9：渲染对象位 27-28（语料 256 = 值 1，含义在渲染侧）；位 27：把 Emissive 复制进粒子；其余位见 TD | 位 1、24 已确认 | TD 3d31390, 3d30e68 |
 | `Color`、`ColorRange`、`ColorRate`、`EmissiveColor`、`EmissiveRate` | 颜色参数；材质响应在着色器 | 部分待确认 | TD |
-| `MaxPartsNum` | 部件序列长度（循环长度） | 已确认 | TD |
+| `MaxPartsNum` | 部件序列长度（循环长度），读自属性 `+0x58`；不读网格资源。语料中等于网格 LOD0 的 mesh group 数，一个部件就是一个 mesh group | 已确认 | TD 3d31191；Re4MeshTests |
 | `PartsStartNo` | MinMaxExclusiveI；起始部件（位 24 时按顺序在 [min, maxEx) 内循环） | 已确认 | TD 3d30eb6 |
 | `PlaySpeed` | MinMax；`lerp × 60`，单位 部件 / (1/60 秒) | 已确认 | TD 3d30f1c |
-| `PlaySpeedCoef` | CenterSpread；`speed *= powf(coef, dt·60)` | 已确认 | TD |
+| `PlaySpeedCoef` | CenterSpread。设置 `+0xeb7` = 0（离线预览）时每 tick `speed *= coef`，与 dt 无关；非 0 时用 `powf(coef, dt·60)` 并对位移做精确积分 | 已确认 | TD 3d310e8；exp_mesh |
 | `PlayType` | 0 Pause、1 Loop（取模）、2 Finish（停在末部件并杀死粒子）、3 停在末部件 | 已确认 | TD 3d311d8 |
-| `PlayOrder` | 1 倒放、2 50% 倒放 | 已确认 | TD |
+| `PlayOrder` | 0 正放、1 倒放、2 50% 倒放（每粒子抽 1 位） | 已确认 | TD 3d30f70 |
 | `RotationOrder`、`RotationX/Y/Z` | CenterSpread，弧度；写角度槽 | 已确认 | TD |
 | `SizeX/Y/Z`、`SizeScalar` | CenterSpread；写 X/Y/Z 与 U 槽；最终缩放 ≈ (U·X, U·Y, U·Z) × 发射器缩放 | 已确认（乘积为推定） | TD, SCA |
 | `FrontAxis` | 0 X、1 Y、2 Z（默认 Z） | 已确认 | TD |
 
-部件索引每帧 `index += speed·dt`，越过 MaxPartsNum 时按 PlayType 处理；索引写入实例，部件选择与插值在渲染侧。
+逐粒子记录在类型块 `+0x100`，每槽 0x38 字节：`+0` 部件索引（float），`+4` 播放速度（部件 / 秒，= PlaySpeed × 60），`+8` PlaySpeedCoef，`+0xc` 累计时间。每 tick 先 `index += speed·dt`（用旧速度），再更新速度；出生 tick 不推进。越过 MaxPartsNum 时：1 取模，2 置为 MaxPartsNum−1 并清粒子存活位，3 置为 MaxPartsNum−1 后照常推进（在末部件上来回，取整后停在末部件）。属性 `+0x15a`、`+0xc2` 置位时索引另写进渲染实例 `[+0x1108] + 槽 × 0x50`（3d31030）。渲染取索引的整数部分作 mesh group，相邻部件之间是否插值未读（exp_mesh 原生逐步一致，已确认）。
+
+`Flags` 位 1：3d31390 把部件记录 `+0x10` 的四元数（出生为单位）平滑地转向速度，使 FrontAxis 对准运动方向；网格实例构建函数 3d2f8f0 的旋转 = 欧拉角矩阵 · 该四元数（行向量），欧拉角是局部预旋转。缩放 = U·(X, Y, Z)，粒子标志 0x4000 时再乘 +0x90..+0x98（exp_mesh_rotation、Re4MeshTests，已确认）。
+
+`Flags` 位 27 关时 EmissiveColor / EmissiveRate 不进入粒子（语料 Flags 多为 256）。材质为普通延迟材质（`shader_basic_standard` 的 BaseMetalMap ALBM，alpha 是金属度；`shader_0002_TranslucencyLiquid` 的 BaseMap），由场景光照。
 
 #### 4.3.12 GPU 类型
 
@@ -1649,6 +1653,6 @@ EdgeBlend 不用贴图 RGB：内侧是顶点颜色 × ColorRate，外缘是 Colo
 | Velocity3D 初速度的设置时机 | SEM：出生循环在形状采样后调用速度初始化 3d1a420 | ORD：3D 出生前置步骤里没有速度；初速度在粒子第一个 tick 由 3d05350 的 3d1ada0 设置，并在同一调用里先积分一步 | ORD |
 | Billboard3D 出生函数 | SCA 的表格把 3d17320 记为 Billboard3D | ORD：3d17320 是 Billboard2D 出生（salt 0x0d），Billboard3D 是 3d187e0（salt 0x0f）；抽样公式相同 | ORD |
 | CenterSpread 是否在 spread = 0 时消耗随机数 | 早期笔记只列出 Blink、Transform3DModifier 为始终消耗 | ORD：只有 ScaleAnim、Billboard3D 尺寸与旋转、Velocity3D Speed / GravityRate 有门控，RotateAnim、Velocity3D 方向 / SpeedCoef / Inherit、Mesh、RibbonLength、ParentOptions 均无门控 | ORD |
-| TypeMesh 随机倒放的字段 | TD：PlayOrder 2 = 50% 倒放 | ORD 表中写作 PlayType 2 时多抽 1 次 | 未裁定，按 TD 写作 PlayOrder |
+| TypeMesh 随机倒放的字段 | TD：PlayOrder 2 = 50% 倒放 | ORD 表中写作 PlayType 2 时多抽 1 次 | 已裁定为 PlayOrder：出生 3d30f70 读类型块 +0x40，紧跟 PlayType（+0x3c，exp_mesh 以 PlayType 2/3 的原生行为核对） |
 | Velocity3D 延迟帧的成员命名 | SEM 写作 `s + randint[−r, +r]`；TD 提醒 RangeI 文件顺序为 {r, s}，需复核 | PC 的 DelayFrameCollision 读码确认"第一个 = 中心" | 第一个成员 = 中心（C# CenterSpreadI.center），两者一致 |
 

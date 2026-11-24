@@ -22,6 +22,9 @@ public readonly record struct ColorHeader(int Blend, float ColorRate, float Inte
     public static ColorHeader From(PreviewEntryState state, PreviewDocument? document = null)
     {
         int c = state.ConstantOffset;
+        if (c < 0 && document?.Entry.TypeAttribute is EFXAttributeTypeMeshV2 mesh)
+            // TypeMesh: drawn opaque with the file's ColorRate (its type block has no Polygon3DConstant).
+            return new(0, mesh.ColorRate, 1, Vector4.Zero, 0, 1);
         if (c < 0)
         {
             var t = document?.Entry.TypeAttribute as EFXAttributeTypeBillboard2D ?? throw new InvalidDataException($"Type {state.Type} needs its file header");

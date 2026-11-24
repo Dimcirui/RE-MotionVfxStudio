@@ -300,6 +300,10 @@ unsafe void RunCorpus(GL gl)
         ("Billboard2D", "billboard2d"),
         ("RibbonFollow", "_chainsaw/vfx/effecteditor/efd_weapon/efd_wp5837/efd_0015_wp5837_explosion_0000.efx.3539837"),
         ("RibbonFollow + RibbonLength (spark)", "re_engine_library/vfx_library/effecteditor/efd_spark/efd_capcom_spark_loop00_l_0000.efx.3539837"),
+        // TypeMesh: the mesh shaders compile and draw (wood debris with NRMR; use_UVScroll scale override; liquid splash).
+        ("TypeMesh (wood debris)", "_anotherorder/vfx/effecteditor/efd_event/cs/efd_csf004_s00/efd_0015_csf004_s00_destruction_0007.efx.3539837"),
+        ("TypeMesh UV transform", "_chainsaw/vfx/effecteditor/efd_setmodel/efd_sm23_507_10/efd_0015_sm23_507_10_0000.efx.3539837"),
+        ("TypeMesh (blood splash)", "_anotherorder/vfx/effecteditor/efd_character/efd_ao_chd7/efd_0015_ao_chd7_gimmick_mot_0040.efx.3539837"),
     };
     // Candidates for features whose first sample file the emulator cannot run: the first file where an
     // entry with the feature is actually shown is used.

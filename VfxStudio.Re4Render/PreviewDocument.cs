@@ -30,11 +30,14 @@ public sealed record PreviewTexture(string Path, string Source, byte[] Bytes, bo
 }
 public sealed record UvFrame(Vector4 Rect, int Texture);
 /// <summary>Drawable Type attributes. The value is the vertex shader's typeKind.</summary>
-public enum PreviewTypeKind { Billboard3D = 0, Polygon = 1, Billboard2D = 2, RibbonFollow = 3, RibbonLength = 4, RibbonFixEnd = 5, PolygonTrail = 6 }
+public enum PreviewTypeKind { Billboard3D = 0, Polygon = 1, Billboard2D = 2, RibbonFollow = 3, RibbonLength = 4, RibbonFixEnd = 5, PolygonTrail = 6, Mesh = 7 }
 /// <param name="Missing">Resources (.uvs, textures) that were not found and are drawn with the checker placeholder.</param>
 public sealed record PreviewDocument(string Path, int Offset, EFXEntry Entry, string UvsPath, uint UvFlags,
     IReadOnlyList<UvFrame[]> Sequences, IReadOnlyList<PreviewTexture> Textures, IReadOnlyList<string>? Missing = null)
 {
+    /// <summary>TypeMesh: geometry and material; null for the other kinds. <see cref="Textures"/> holds its albedo
+    /// ([0], drawn through one full-texture frame) and NRMR ([1]) when the material has one.</summary>
+    public PreviewMeshData? Mesh { get; init; }
     /// <summary>Frames per sequence assumed when the .uvs is missing (its real count is unknown).</summary>
     public const int PlaceholderFrames = 64;
     public EFXAttributeTypeBillboard3D Billboard => Entry.Attributes.OfType<EFXAttributeTypeBillboard3D>().Single();
@@ -50,6 +53,7 @@ public sealed record PreviewDocument(string Path, int Offset, EFXEntry Entry, st
         EFXAttributeTypeRibbonLength => PreviewTypeKind.RibbonLength,
         EFXAttributeTypeRibbonFixEnd f when f.ShapeDivision >= 2 => PreviewTypeKind.RibbonFixEnd,
         EFXAttributeTypePolygonTrail => PreviewTypeKind.PolygonTrail,
+        EFXAttributeTypeMeshV2 => PreviewTypeKind.Mesh,
         _ => null
     };
     /// <summary>Ribbon types drawn from the engine's point pool.</summary>
@@ -107,7 +111,15 @@ public sealed record PreviewDocument(string Path, int Offset, EFXEntry Entry, st
     public static PreviewDocument Read(string path, int offset, Re4ResourceSource source)
     {
         var entry=ReadEntry(path,offset);
-        if(KindOf(entry)==null) throw new NotSupportedException("Preview supports CPU Billboard3D, Polygon and Billboard2D entries");
+        if(KindOf(entry)==null) throw new NotSupportedException("Preview supports CPU Billboard3D, Polygon, Billboard2D, ribbon and Mesh entries");
+        if(entry.TypeAttribute is EFXAttributeTypeMeshV2 meshType)
+        {
+            // TypeMesh has no UVSequence: the material's albedo is drawn through one full-texture frame. Its Flags low
+            // bits are not a blend type (bit 1 = FrontAxis to velocity); the mesh is drawn opaque.
+            var mesh = PreviewMeshData.Load(meshType, source);
+            return new(System.IO.Path.GetFullPath(path), offset, entry, "", 0, [[new UvFrame(new Vector4(0, 0, 1, 1), 0)]], mesh.Textures,
+                mesh.Missing.Count > 0 ? mesh.Missing : null) { Mesh = mesh };
+        }
         uint flags=FlagsOf(entry.TypeAttribute);
         if(!BillboardRenderer.SupportsBlend((int)(flags & 15)))
             throw new NotSupportedException($"预览暂不支持混合方式 {flags & 15}（支持 0–4）。");
@@ -232,8 +244,12 @@ public sealed class Re4ResourceSource : IDisposable
         }
         if (!indexed)
         {
-            // Standard RE4 archive names, in patch order. Metadata and payloads are read-only.
-            foreach (string file in Directory.EnumerateFiles(gameDirectory,"re_chunk_000*.pak").Order(StringComparer.OrdinalIgnoreCase))
+            // Standard RE4 archive names: the DLC archives (dlc/re_dlc_stm_*.pak, which hold some Separate Ways
+            // materials), then the main chain in patch order, later entries replacing earlier ones. Read-only.
+            string dlc = System.IO.Path.Combine(gameDirectory, "dlc");
+            var archives = (Directory.Exists(dlc) ? Directory.EnumerateFiles(dlc, "re_dlc_stm_*.pak").Order(StringComparer.OrdinalIgnoreCase) : Enumerable.Empty<string>())
+                .Concat(Directory.EnumerateFiles(gameDirectory,"re_chunk_000*.pak").Order(StringComparer.OrdinalIgnoreCase));
+            foreach (string file in archives)
             {
                 if (new FileInfo(file).Length <= 16) continue;
                 var pak = new PakFile { filepath = file };

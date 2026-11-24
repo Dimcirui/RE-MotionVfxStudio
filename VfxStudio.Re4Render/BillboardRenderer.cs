@@ -230,6 +230,118 @@ public sealed unsafe class BillboardRenderer : IDisposable
             if (((acBytes >> 24) & 3u) == 3u) acBytes=(acBytes & 0xff00ffffu) | (uint(p.extra.y*255.0+0.5) << 16);
         }
         """;
+    /// <summary>TypeMesh: the entry's mesh group for the particle's part, one instanced draw per part
+    /// (RENDER-HOST 5.6), shaded by <see cref="MeshFragmentSource"/>.</summary>
+    internal const string MeshVertexSource = "#version 460 core\n" + AppearanceShaderLibrary.Block + AppearanceShaderLibrary.Functions + """
+        layout(location=0) in vec3 aPos;
+        layout(location=1) in vec3 aNormal;
+        layout(location=2) in vec2 aUv;
+        layout(location=3) in vec4 aTangent;   // xyz tangent, w bitangent sign
+        struct MeshInstance { mat4 world; uvec4 data; };   // data: RGBA8, id, life byte, reserved
+        layout(std430,binding=5) readonly buffer MeshInstances { MeshInstance meshes[]; };
+        uniform mat4 vp;
+        uniform vec3 cameraPos;
+        out vec2 uv;
+        out vec4 tint;
+        out float viewDepth;
+        flat out uint acBytes;
+        out vec3 worldPos;
+        out vec3 worldNormal;
+        out vec4 worldTangent;
+        void main() {
+            MeshInstance m = meshes[gl_BaseInstance + gl_InstanceID];
+            vec3 centre = m.world[3].xyz;
+            vec3 pos = (m.world * vec4(aPos, 1.0)).xyz;
+            vec4 clip = vp * vec4(pos, 1.0);
+            float factor = 1.0;
+            if (hasFlag(1)) factor *= fadeDepth((vp * vec4(centre,1)).w, fadeDepthP);
+            if (hasFlag(2)) factor *= fadeAngle(coneDir.xyz, emitterPos.xyz, centre, cameraPos, modes.z, fadeAngleP.x, fadeAngleP.y, fadeAngleP.z);
+            if (factor < CULL) { gl_Position=vec4(2.0,2.0,2.0,1.0); uv=vec2(0); tint=vec4(0); viewDepth=0; acBytes=0u; worldPos=vec3(0); worldNormal=vec3(0,1,0); worldTangent=vec4(1,0,0,1); return; }
+            // Non-uniform and negative scales (the corpus has both): normals by the inverse transpose, and a mirrored
+            // instance flips the bitangent.
+            mat3 linear = mat3(m.world);
+            float det = determinant(linear);
+            worldNormal = abs(det) > 1e-20 ? transpose(inverse(linear)) * aNormal : aNormal;
+            worldTangent = vec4(linear * aTangent.xyz, aTangent.w * (det < 0.0 ? -1.0 : 1.0));
+            worldPos = pos;
+            gl_Position = clip;
+            viewDepth = clip.w;
+            uv = aUv;
+            tint = unpackUnorm4x8(m.data.x);
+            tint.a *= factor;
+            acBytes = uint(acInfo.x);
+            if (((acBytes >> 24) & 3u) == 3u) acBytes = (acBytes & 0xff00ffffu) | (m.data.z << 16);
+        }
+        """;
+    /// <summary>TypeMesh shading (compromise for the deferred materials, RENDER-HOST 5.6): albedo × ColorParam ×
+    /// particle colour × ColorRate through <c>shade</c>, lit by the preview light with the NRMR normal; metalness from
+    /// the ALBM alpha (× Metallic), roughness from the NRMR alpha (× Roughness) or the Roughness parameter; a normalised
+    /// Blinn-Phong highlight of the key light with F0 = mix(0.04, albedo, metal); EmissiveColor × EmissiveRate when the
+    /// type copies it. Opaque: the texture alpha is not coverage.</summary>
+    internal const string MeshFragmentSource = "#version 460 core\n" + AppearanceShaderLibrary.Block + AppearanceShaderLibrary.Functions + """
+        in vec2 uv;
+        in vec4 tint;
+        in float viewDepth;
+        flat in uint acBytes;
+        in vec3 worldPos;
+        in vec3 worldNormal;
+        in vec4 worldTangent;
+        uniform sampler2D particleTexture;   // albedo
+        uniform sampler2D normalTexture;     // NRMR
+        uniform int hasNormalMap;
+        uniform int metalInAlpha;
+        uniform vec4 meshColor;              // ColorParam
+        uniform vec2 meshMaterial;           // Metallic, Roughness
+        uniform vec3 meshEmissive;
+        uniform vec3 cameraPos;
+        uniform int uvScroll;                // use_UVScroll
+        uniform vec4 uvTransform;            // U/V_Scale, U/V_Offset
+        uniform vec2 uvShift;                // frac(U/V_Speed * 0.001 * ms), from the CPU
+        layout(location=0) out vec4 color;
+        layout(location=1) out vec4 bright;
+        void main() {
+            // shader_basic_standard: one transformed UV for both textures.
+            vec2 st = uvScroll != 0 ? uvTransform.zw + uvTransform.xy * uv + uvShift : uv;
+            vec4 base = texture(particleTexture, st);
+            vec3 albedo = base.rgb * meshColor.rgb;
+            float metal = clamp(metalInAlpha != 0 ? base.a * meshMaterial.x : meshMaterial.x, 0.0, 1.0);
+            float rough = clamp(meshMaterial.y, 0.0, 1.0);
+            vec3 V = normalize(cameraPos - worldPos);
+            vec3 n = normalize(worldNormal);
+            if (!gl_FrontFacing) n = -n;      // two-sided, as liquid sheets are seen from both sides
+            if (hasNormalMap != 0) {
+                // NRMR: tangent-space normal in RGB (z stored, not rebuilt), roughness in A (mmtr PS b048).
+                vec4 t = texture(normalTexture, st);
+                vec3 local = t.xyz * 2.0 - 1.0;
+                vec3 T = worldTangent.xyz - n * dot(n, worldTangent.xyz);
+                if (dot(T, T) > 1e-12) {
+                    T = normalize(T);
+                    vec3 B = cross(n, T) * (worldTangent.w < 0.0 ? -1.0 : 1.0);
+                    n = normalize(T * local.x + B * local.y + n * local.z);
+                }
+                rough = clamp(t.a * meshMaterial.y, 0.0, 1.0);
+            }
+            bool lit = hasFlag(2048);
+            particleLight = lit ? previewLight(n) : vec3(1.0);
+            vec4 c = shade(vec4(albedo * (1.0 - metal), 1.0), tint, 1.0, acBytes);
+            if (lit) {
+                vec3 L = normalize(lightB.xyz);
+                vec3 H = normalize(L + V);
+                float gloss = 1.0 - rough;
+                float power = exp2(1.0 + 10.0 * gloss);
+                vec3 f0 = mix(vec3(0.04), albedo, metal);
+                float spec = pow(max(dot(n, H), 0.0), power) * (power + 8.0) / 25.1327 * max(dot(n, L), 0.0) * lightA.w;
+                // Ambient reflection stands in for the environment the deferred material would sample.
+                vec3 ambient = f0 * lightA.rgb * mix(0.2, 1.0, gloss);
+                c.rgb += (f0 * spec + ambient) * header.x * tint.a;
+            }
+            c.rgb += meshEmissive;
+            if (c.a < CULL) discard;
+            color = c;
+            float brightness = dot(c.rgb, vec3(.2126, .7152, .0722));
+            bright = vec4(brightness > 1 ? c.rgb : vec3(0), c.a);
+        }
+        """;
     internal const string FragmentSource = "#version 460 core\n" + AppearanceShaderLibrary.Block + AppearanceShaderLibrary.Functions + """
         in vec2 uv;
         in vec4 tint;
@@ -323,6 +435,12 @@ public sealed unsafe class BillboardRenderer : IDisposable
     private float[] segmentData = [];
     private int segmentCount;
     private const int SegmentFloats = 20;
+    // TypeMesh: vertex / index buffers (shared through the cache), per-particle instances, and one draw per part.
+    private readonly uint meshVao, meshInstances;
+    private readonly MeshGpu? mesh;
+    private readonly Shader? meshShader;
+    private MeshInstance[] meshData = [];
+    private readonly List<(int Part,int First,int Count)> meshBatches = new();
     public EntryAppearance Appearance { get; }
     /// <summary>The entry has a Distortion attribute: it samples the scene drawn before it.</summary>
     public bool IsDistortion => Appearance.Distortion != null;
@@ -363,6 +481,22 @@ public sealed unsafe class BillboardRenderer : IDisposable
                 frames.AddRange(seq.Select(f=>new GpuUv { Rect=f.Rect,Texture=(uint)f.Texture }));
             }
             if(document.IsRibbon) segmentBuffer=gl.GenBuffer();
+            if(document.Mesh is { } meshAsset)
+            {
+                meshShader=cache?.MeshShader ?? new Shader(gl, MeshVertexSource, MeshFragmentSource);
+                mesh=cache?.Mesh(meshAsset) ?? new MeshGpu(gl, meshAsset);
+                meshVao=gl.GenVertexArray();
+                gl.BindVertexArray(meshVao);
+                gl.BindBuffer(BufferTargetARB.ArrayBuffer,mesh.Vertices);
+                const uint stride=PreviewMeshData.VertexFloats*4;
+                gl.EnableVertexAttribArray(0); gl.VertexAttribPointer(0,3,VertexAttribPointerType.Float,false,stride,(void*)0);
+                gl.EnableVertexAttribArray(1); gl.VertexAttribPointer(1,3,VertexAttribPointerType.Float,false,stride,(void*)12);
+                gl.EnableVertexAttribArray(2); gl.VertexAttribPointer(2,2,VertexAttribPointerType.Float,false,stride,(void*)24);
+                gl.EnableVertexAttribArray(3); gl.VertexAttribPointer(3,4,VertexAttribPointerType.Float,false,stride,(void*)32);
+                gl.BindBuffer(BufferTargetARB.ElementArrayBuffer,mesh.Indices);
+                gl.BindVertexArray(0);
+                meshInstances=gl.GenBuffer();
+            }
             entryBuffer=gl.GenBuffer();
             gl.BindBuffer(BufferTargetARB.UniformBuffer,entryBuffer);
             gl.BufferData(BufferTargetARB.UniformBuffer,(nuint)EntryUniforms.Std140Bytes,null,BufferUsageARB.DynamicDraw);
@@ -459,9 +593,40 @@ public sealed unsafe class BillboardRenderer : IDisposable
         UploadMs=watch.Elapsed.TotalMilliseconds;
     }
 
+    /// <summary>Mesh instances grouped by part (the mesh group drawn), parts clamped to the groups the mesh has.</summary>
+    private void UploadMesh(PreviewFrame frame)
+    {
+        var watch=System.Diagnostics.Stopwatch.StartNew();
+        var state=State(frame);
+        meshBatches.Clear();
+        var items=new List<(int Part,MeshInstance Item)>(state.Count);
+        int groups=mesh!.Groups.Length;
+        for(int i=state.First;i<state.First+state.Count;i++)
+        {
+            var p=frame.Particles[i];
+            var item=MeshInstance.Decode(p,state);
+            if(!item.Finite) continue;
+            items.Add((Math.Clamp(state.MeshPart(p.Slot),0,groups-1),item));
+        }
+        items.Sort((a,b)=>a.Part.CompareTo(b.Part));
+        if(meshData.Length<items.Count) meshData=new MeshInstance[Math.Max(items.Count,64)];
+        for(int k=0;k<items.Count;k++)
+        {
+            meshData[k]=items[k].Item;
+            if(meshBatches.Count==0 || meshBatches[^1].Part!=items[k].Part) meshBatches.Add((items[k].Part,k,1));
+            else { var b=meshBatches[^1]; meshBatches[^1]=(b.Part,b.First,b.Count+1); }
+        }
+        InstanceCount=items.Count;
+        gl.BindBuffer(BufferTargetARB.ShaderStorageBuffer,meshInstances);
+        fixed(MeshInstance* ptr=meshData) gl.BufferData(BufferTargetARB.ShaderStorageBuffer,(nuint)(Math.Max(1,items.Count)*sizeof(MeshInstance)),ptr,BufferUsageARB.StreamDraw);
+        uploaded=frame;
+        UploadMs=watch.Elapsed.TotalMilliseconds;
+    }
+
     private void Upload(PreviewFrame frame, Matrix4x4 view, bool sort)
     {
         if(document.IsRibbon) { UploadRibbon(frame); return; }
+        if(mesh!=null) { UploadMesh(frame); return; }
         var watch=System.Diagnostics.Stopwatch.StartNew();
         currentSlot=(currentSlot+1)%3;
         if(fences[currentSlot]!=0)
@@ -519,7 +684,7 @@ public sealed unsafe class BillboardRenderer : IDisposable
     public void Render(PreviewFrame frame, Matrix4x4 view, Matrix4x4 projection, PreviewRenderContext context)
     {
         var config=context.Config;
-        bool sort=config.SortWithinEntry && !document.IsRibbon;
+        bool sort=config.SortWithinEntry && !document.IsRibbon && mesh==null;
         if(!ReferenceEquals(frame,uploaded) || sort!=uploadedSorted || sort && view!=uploadedView) Upload(frame,view,sort);
         var state=State(frame);
         var header=ColorHeader.From(state,document);
@@ -538,12 +703,24 @@ public sealed unsafe class BillboardRenderer : IDisposable
         // Screen-space quads have no view depth: no fades, soft particles or depth bias.
         if(document.Kind==PreviewTypeKind.Billboard2D)
             uniforms.Flags&=~(EntryUniforms.FadeDepthBit|EntryUniforms.FadeAngleBit|EntryUniforms.SoftBit|EntryUniforms.DepthBiasBit);
+        if(mesh!=null)
+        {
+            // Opaque lit geometry: no soft-particle edge, depth bias or frame blend; lit whenever lighting is on
+            // (the materials are deferred, lit by the scene).
+            uniforms.Flags&=~(EntryUniforms.SoftBit|EntryUniforms.DepthBiasBit|EntryUniforms.FrameBlendBit);
+            if(config.Lighting)
+            {
+                uniforms.Flags|=EntryUniforms.LitBit; uniforms.Ambient=config.Ambient; uniforms.KeyLight=config.KeyLight;
+                uniforms.LightDirection=config.LightDirection.LengthSquared()>0 ? Vector3.Normalize(config.LightDirection) : Vector3.UnitY;
+            }
+        }
         uniforms.Exposure=context.Exposure; uniforms.Near=context.Near; uniforms.Far=context.Far;
         if(context.SceneDepth==0) uniforms.Flags&=~EntryUniforms.SoftBit;
         var bytes=uniforms.ToStd140();
         gl.BindBuffer(BufferTargetARB.UniformBuffer,entryBuffer);
         fixed(byte* ptr=bytes) gl.BufferSubData(BufferTargetARB.UniformBuffer,0,(nuint)bytes.Length,ptr);
         gl.BindBufferBase(BufferTargetARB.UniformBuffer,3,entryBuffer);
+        if(mesh!=null) { RenderMesh(frame,view,projection); return; }
         gl.Disable(EnableCap.CullFace); gl.Enable(EnableCap.DepthTest); gl.DepthMask(false);
         gl.Enable(EnableCap.Blend);
         var pair=config.Blends[header.BlendState];
@@ -594,6 +771,48 @@ public sealed unsafe class BillboardRenderer : IDisposable
         gl.BindVertexArray(0); gl.Disable(EnableCap.Blend);gl.DepthMask(true);gl.ColorMask(1,true,true,true,true);
     }
 
+    private void RenderMesh(PreviewFrame frame, Matrix4x4 view, Matrix4x4 projection)
+    {
+        gl.Disable(EnableCap.CullFace); gl.Enable(EnableCap.DepthTest); gl.DepthMask(true);
+        // Alpha blending keeps a fading particle (life, AlphaCorrection) visible as it fades; an opaque one
+        // writes depth like the deferred mesh it stands for.
+        gl.Enable(EnableCap.Blend);
+        gl.BlendFuncSeparate(BlendingFactor.SrcAlpha,BlendingFactor.OneMinusSrcAlpha,BlendingFactor.One,BlendingFactor.OneMinusSrcAlpha);
+        Matrix4x4.Invert(view,out var inverse);
+        var s=meshShader!;
+        s.Use(); s.SetUniform("vp",view*projection);
+        s.SetUniform("cameraPos",new Vector3(inverse.M41,inverse.M42,inverse.M43));
+        var material=document.Mesh!;
+        bool normalMap=material.NormalRoughness!=null && textures.Length>1;
+        s.SetUniform("particleTexture",0); s.SetUniform("normalTexture",3);
+        s.SetUniform("hasNormalMap",normalMap?1:0); s.SetUniform("metalInAlpha",material.MetalInAlpha?1:0);
+        s.SetUniform("meshColor",material.ColorParam);
+        s.SetUniform("meshMaterial",new Vector2(material.Metallic,material.Roughness));
+        s.SetUniform("meshEmissive",material.Emissive);
+        var scroll=material.UvScroll;
+        s.SetUniform("uvScroll",scroll!=null?1:0);
+        if(scroll!=null)
+        {
+            s.SetUniform("uvTransform",new Vector4(scroll.Scale.X,scroll.Scale.Y,scroll.Offset.X,scroll.Offset.Y));
+            // timeMillisecond is the scene clock; the preview stands in its playback time.
+            s.SetUniform("uvShift",scroll.Shift(frame.Time*1000));
+        }
+        if(normalMap) textures[1].Bind(TextureUnit.Texture3);
+        gl.ActiveTexture(TextureUnit.Texture0);
+        textures[0].Bind();
+        gl.BindVertexArray(meshVao);
+        gl.BindBufferBase(BufferTargetARB.ShaderStorageBuffer,5,meshInstances);
+        foreach(var batch in meshBatches)
+        {
+            var range=mesh!.Groups[batch.Part];
+            if(range.Count==0) continue;
+            gl.DrawElementsInstancedBaseInstance(PrimitiveType.Triangles,(uint)range.Count,DrawElementsType.UnsignedInt,
+                (void*)(range.First*sizeof(uint)),(uint)batch.Count,(uint)batch.First);
+            DrawCalls++;
+        }
+        gl.BindVertexArray(0); gl.Disable(EnableCap.Blend); gl.DepthMask(true); gl.ColorMask(1,true,true,true,true);
+    }
+
     private static BlendingFactor Gl(BlendFactor f) => f switch
     {
         BlendFactor.Zero=>BlendingFactor.Zero, BlendFactor.One=>BlendingFactor.One, BlendFactor.SrcAlpha=>BlendingFactor.SrcAlpha,
@@ -607,8 +826,10 @@ public sealed unsafe class BillboardRenderer : IDisposable
         foreach(var fence in fences) if(fence!=0) gl.DeleteSync(fence);
         if(mapped!=0) { gl.BindBuffer(BufferTargetARB.ShaderStorageBuffer,instances);gl.UnmapBuffer(BufferTargetARB.ShaderStorageBuffer); }
         if(segmentBuffer!=0) gl.DeleteBuffer(segmentBuffer);
+        if(meshVao!=0) gl.DeleteVertexArray(meshVao);
+        if(meshInstances!=0) gl.DeleteBuffer(meshInstances);
         gl.DeleteBuffer(instances);gl.DeleteBuffer(entryBuffer);gl.DeleteBuffer(uvBuffer);gl.DeleteBuffer(sequenceBuffer);gl.DeleteVertexArray(vao);
-        if(owned) { foreach(var t in textures) t?.Dispose(); shader.Dispose(); }
+        if(owned) { foreach(var t in textures) t?.Dispose(); shader.Dispose(); meshShader?.Dispose(); mesh?.Dispose(); }
     }
 }
 
@@ -618,8 +839,16 @@ public sealed class BillboardGpuCache(GL gl) : IDisposable
 {
     private readonly Dictionary<string,GpuTexture> textures = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string,string> failures = new(StringComparer.OrdinalIgnoreCase);
-    private Shader? shader;
+    private Shader? shader, meshShader;
+    private readonly Dictionary<string,MeshGpu> meshes = new(StringComparer.OrdinalIgnoreCase);
     public Shader Shader => shader ??= new Shader(gl, BillboardRenderer.VertexSource, BillboardRenderer.FragmentSource);
+    public Shader MeshShader => meshShader ??= new Shader(gl, BillboardRenderer.MeshVertexSource, BillboardRenderer.MeshFragmentSource);
+    /// <summary>GPU buffers of a TypeMesh's geometry, keyed by mesh path (resources do not change during a session).</summary>
+    public MeshGpu Mesh(PreviewMeshData data)
+    {
+        if(!meshes.TryGetValue(data.MeshPath,out var hit)) meshes[data.MeshPath]=hit=new MeshGpu(gl,data);
+        return hit;
+    }
     public int TextureCount => textures.Count;
 
     /// <summary>A GPU texture for <paramref name="texture"/>: the RE4 .tex bytes, or the RGBA checker of a placeholder.</summary>
@@ -648,8 +877,31 @@ public sealed class BillboardGpuCache(GL gl) : IDisposable
     {
         foreach(var t in textures.Values) t.Dispose();
         textures.Clear();
-        shader?.Dispose();
+        foreach(var m in meshes.Values) m.Dispose();
+        meshes.Clear();
+        shader?.Dispose(); meshShader?.Dispose();
     }
+}
+
+/// <summary>Vertex and index buffers of one <see cref="PreviewMeshData"/>; <see cref="Groups"/> are index ranges.</summary>
+public sealed unsafe class MeshGpu : IDisposable
+{
+    private readonly GL gl;
+    public uint Vertices { get; }
+    public uint Indices { get; }
+    public (int First,int Count)[] Groups { get; }
+    public MeshGpu(GL gl, PreviewMeshData data)
+    {
+        this.gl=gl; Groups=data.Groups;
+        Vertices=gl.GenBuffer();
+        gl.BindBuffer(BufferTargetARB.ArrayBuffer,Vertices);
+        fixed(float* v=data.Vertices) gl.BufferData(BufferTargetARB.ArrayBuffer,(nuint)(data.Vertices.Length*4),v,BufferUsageARB.StaticDraw);
+        Indices=gl.GenBuffer();
+        gl.BindBuffer(BufferTargetARB.ElementArrayBuffer,Indices);
+        fixed(uint* i=data.Indices) gl.BufferData(BufferTargetARB.ElementArrayBuffer,(nuint)(data.Indices.Length*4),i,BufferUsageARB.StaticDraw);
+        gl.BindBuffer(BufferTargetARB.ElementArrayBuffer,0);
+    }
+    public void Dispose() { gl.DeleteBuffer(Vertices); gl.DeleteBuffer(Indices); }
 }
 
 /// <summary>Frame-wide inputs of a billboard draw.</summary>

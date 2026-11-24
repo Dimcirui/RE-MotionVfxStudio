@@ -131,7 +131,7 @@ SERVICES = {
     # (Billboard3D builder 3d18663 stores it at block+0x38); here a zeroed slot
     0x4748B80: ("render slot alloc", lambda c, d, p, q: _IMG[0].alloc(0xEE0)),
     # mesh render-instance pool (TypeMesh builder 3d2eaec stores it at block+0xf8); here a zeroed instance
-    0x4659170: ("mesh instance alloc", lambda c, d, p, q: _IMG[0].alloc(0x4000)),
+    0x4659170: ("mesh instance alloc", lambda c, d, p, q: _mesh_instance()),
     # mesh instance setup from the .mesh / .mdf2 resources (TypeMesh builder 3d2eb26 / 3d2eb34 / 3d2eb49):
     # render side, needs the real mesh resource; skipped
     0x46565C0: ("mesh instance setup A", None),
@@ -175,6 +175,20 @@ def _uvs(img, obj, counts=None):
         rn.set_u64(table + 16 * i, blk)
         rn.set_u64(table + 16 * i + 8, img.alloc(16 * npat))
     rn.set_u64(obj + 0x70, table)
+
+
+MESH_SINK = []   # [address]: one shared buffer for every stub mesh instance's per-particle array
+
+
+def _mesh_instance():
+    """Zeroed stand-in for a mesh render instance. The TypeMesh update writes each particle's part into
+    [instance + 0x1108] + slot * 0x50 (3d31030 / 3d31088, when attr +0x15a / +0xc2 are set); nothing in the
+    simulation reads it back, so all instances share one sink sized for the 10000-particle limit."""
+    inst = _IMG[0].alloc(0x4000)
+    if not MESH_SINK:
+        MESH_SINK.append(_IMG[0].alloc(10000 * 0x50))
+    rn.set_u64(inst + 0x1108, MESH_SINK[0])
+    return inst
 
 
 def _resource(path):

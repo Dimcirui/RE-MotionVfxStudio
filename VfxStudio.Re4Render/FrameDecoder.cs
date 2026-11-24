@@ -23,6 +23,26 @@ public sealed record PreviewEntryState(int Index, uint Flags16c, uint Flags174, 
         if (StripPointsPerParticle == 0 || at + 4 > StripStates.Length) return 0;
         return (int)Math.Min(FrameDecoder.U32(StripStates.Span, at), (uint)StripPointsPerParticle);
     }
+    /// <summary>TypeMesh: the mesh group a particle shows, the integer part of its part index (record +0 of
+    /// type block +0x100, RUNTIME 4.3.11); -1 when the entry has no mesh records.</summary>
+    public int MeshPart(int slot)
+    {
+        int at = slot * FrameDecoder.MeshRecordStride;
+        if (StripPointsPerParticle != 0 || StripStates.Length < at + FrameDecoder.MeshRecordStride) return -1;
+        float part = FrameDecoder.F32(StripStates.Span, at);
+        return float.IsFinite(part) ? Math.Max(0, (int)part) : 0;
+    }
+    /// <summary>TypeMesh: the FrontAxis quaternion (x, y, z, w) of mesh record +0x10 (3d31390); identity when absent
+    /// or not finite.</summary>
+    public Quaternion MeshOrientation(int slot)
+    {
+        int at = slot * FrameDecoder.MeshRecordStride + 0x10;
+        if (StripPointsPerParticle != 0 || StripStates.Length < at + 16) return Quaternion.Identity;
+        var s = StripStates.Span;
+        var q = new Quaternion(FrameDecoder.F32(s, at), FrameDecoder.F32(s, at + 4), FrameDecoder.F32(s, at + 8), FrameDecoder.F32(s, at + 12));
+        float n = q.LengthSquared();
+        return float.IsFinite(n) && n > 1e-6f ? Quaternion.Normalize(q) : Quaternion.Identity;
+    }
     public ReadOnlySpan<byte> PointsOf(int slot) =>
         StripPoints.Span.Slice(slot * StripPointsPerParticle * FrameDecoder.PointStride, StripPointsPerParticle * FrameDecoder.PointStride);
     /// <summary>Where Polygon3DConstant starts in the type block: +0x54 for Billboard3D (builder 3d18580,
@@ -53,7 +73,7 @@ internal sealed class FrameStorage(byte[]? packet, ParticleRecord[] particles) :
 public static class FrameDecoder
 {
     /// <summary>Frame protocol v3: entry = 16 u32, 16 f32 world matrix, 8 u32 ribbon fields.</summary>
-    public const int HeaderSize = 256, SlotHeaderSize = 64, EntrySize = 160, Stride = 0x140, PointStride = 0x54, RibbonStateStride = 0x68, ProtocolVersion = 3;
+    public const int HeaderSize = 256, SlotHeaderSize = 64, EntrySize = 160, Stride = 0x140, PointStride = 0x54, RibbonStateStride = 0x68, MeshRecordStride = 0x38, ProtocolVersion = 3;
     public static uint U32(ReadOnlySpan<byte> b, int offset) => BinaryPrimitives.ReadUInt32LittleEndian(b.Slice(offset, 4));
     public static float F32(ReadOnlySpan<byte> b, int offset) => BitConverter.Int32BitsToSingle((int)U32(b, offset));
     public static PreviewFrame Decode(byte[] bytes, double sim, double restore, double total, bool pooledPacket=false, int byteCount=-1)
@@ -119,6 +139,14 @@ public static class FrameDecoder
                     stateOffset < stripOffset + stripBytes || (long)stateOffset + stateBytes > b.Length)
                     throw new InvalidDataException("Invalid ribbon point range");
                 strip = bytes.AsMemory(stripOffset, stripBytes);
+                stripStates = bytes.AsMemory(stateOffset, stateBytes);
+            }
+            else if (stateBytes != 0)
+            {
+                // TypeMesh: per-slot part records (type block +0x100), no points.
+                if (U32(b,e+152) != MeshRecordStride || (long)n * MeshRecordStride != stateBytes ||
+                    stateOffset < blockOffset + blockLength || (long)stateOffset + stateBytes > b.Length)
+                    throw new InvalidDataException("Invalid mesh record range");
                 stripStates = bytes.AsMemory(stateOffset, stateBytes);
             }
             states.Add(new(index,U32(b,e+28),U32(b,e+36),b.Slice(blockOffset,blockLength).ToArray(),first,alive-first,checked((int)U32(b,e+4)))

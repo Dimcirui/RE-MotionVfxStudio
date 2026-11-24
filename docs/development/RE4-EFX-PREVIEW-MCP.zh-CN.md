@@ -34,7 +34,7 @@ dotnet <仓库>/VfxStudio.Mcp/bin/Release/net8.0/VfxStudio.Mcp.dll --re4-preview
 | `status` | 文档修订、dirty/撤销状态、属性列表；预览显示的修订与 tick、加载或运行错误、未支持的功能；窗口里是否有未应用的草稿 |
 | `launch` | 启动窗口并等到首帧显示；已有窗口应答时直接返回其状态 |
 | `open` | `fixture`（bb / bb2），或 `path` 加 `entryPosition` / `entryId` / `offset` 之一；整个文件都会加载，所给 entry 作为编辑对象；从 tick 0 暂停开始 |
-| `select_entry` | 切换编辑对象（Billboard3D、Polygon 或 Billboard2D entry）；不重载，不改变 tick |
+| `select_entry` | 切换编辑对象（Billboard3D、Polygon、Billboard2D、RibbonFollow、RibbonLength、RibbonFixEnd、PolygonTrail、Mesh 或 NoDraw entry）；不重载，不改变 tick |
 | `inspect` | 不带参数列属性；带 `attributeIndex` 返回字段、颜色组和曲线（路径、通道、关键帧） |
 | `set_fields` | 一个属性的 1–64 个字段，作为一个修订、一步撤销 |
 | `attribute_types` | 当前 EFX 版本可添加的属性类型名；`catalog` 给出当前 entry 的属性目录（能否添加、RE4 同 Type entry 的使用比例，见 RE4-EFX-PREVIEW-CATALOG） |
@@ -111,7 +111,6 @@ dotnet run -c Release --project tools/Re4McpTests
 ## 未做
 
 - 增删曲线通道、集合扩容、新建空复杂节点。后台目前也不支持这些操作。
-- 复制、粘贴、增删整个 entry（后台的 `duplicate_entry`、`add_entry`、`remove_entry` 和 entry 级粘贴）。预览只显示一个 entry，暂未接入。
 - 原生模拟器还不能运行上述 muzzleflash entry：加载时在 47ce9e4 读取空指针（调用链 3dfe4d1 ← 3d28158 ← 3d068a5），可能与 PtUvSequence 有关。窗口和 MCP 照常打开、编辑这个文档，预览部分报告加载失败。
-- 多 entry 预览，以及 Billboard3D 以外的类型。
+- GPU 类型（GpuBillboard、GpuMesh 等）、MeshEmitter、带 AssignCSV 的 entry（见 RE4-EFX-RENDER-HOST §5.6）。
 - 同时连接游戏内编辑器和离线预览的单一服务器。目前需要登记两个服务器。

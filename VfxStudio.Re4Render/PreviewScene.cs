@@ -219,7 +219,11 @@ public sealed class PreviewScene
     /// <summary>PtLife's attribute type id in RE4 (re4host.py PTLIFE_TYPE).</summary>
     private const int PtLifeTypeId = 131;
     /// <summary>Drawn kinds the preview runs inside child Actions (ribbons not yet).</summary>
-    private static bool ChildKind(PreviewTypeKind? kind) => kind is PreviewTypeKind.Billboard3D or PreviewTypeKind.Polygon or PreviewTypeKind.Billboard2D;
+    /// <summary>Why an entry of a drawable type still cannot run: AssignCSV divides by the row count of its table
+    /// resource (3df20e0), which the worker's resource stand-in leaves at 0.</summary>
+    private static string? Unsupported(EFXEntry entry) =>
+        entry.Attributes.Any(a => a is ReeLib.Efx.Structs.Misc.EFXAttributeAssignCSV) ? "AssignCSV 尚未支持：预览不加载它的表格资源。" : null;
+    private static bool ChildKind(PreviewTypeKind? kind) => kind is PreviewTypeKind.Billboard3D or PreviewTypeKind.Polygon or PreviewTypeKind.Billboard2D or PreviewTypeKind.Mesh;
 
     /// <param name="excluded">Entries to leave out, by position, with the reason (for example a native
     /// fault seen earlier in this document).</param>
@@ -259,6 +263,7 @@ public sealed class PreviewScene
             }
             else if (entry.TypeAttribute is EFXAttributeTypeNoDraw) reason = "NoDraw 不绘制，也没有预览能运行的子 Action 或贴花。";
             else if (PreviewDocument.KindOf(entry) == null) reason = $"类型 {type} 尚未支持。";
+            else if (Unsupported(entry) is { } attribute) reason = attribute;
             else if (shown >= MaxEntries) reason = $"一次最多预览 {MaxEntries} 个 entry。";
             else
             {
@@ -287,6 +292,7 @@ public sealed class PreviewScene
                 string? reason = null; PreviewDocument? document = null;
                 if (excluded != null && excluded.TryGetValue(key, out var known)) reason = known;
                 else if (!ChildKind(PreviewDocument.KindOf(entry))) reason = $"子 Action 里的 {type} 尚未支持。";
+                else if (Unsupported(entry) is { } attribute) reason = attribute;
                 else if (shown >= MaxEntries) reason = $"一次最多预览 {MaxEntries} 个 entry。";
                 else
                 {

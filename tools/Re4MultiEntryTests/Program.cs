@@ -38,9 +38,9 @@ for (int tick = 1; tick <= 600; tick++)
     catch (Exception error) when (PreviewSceneLoader.ExcludeFailedEntry(scene, error, excluded, tick) != null)
     { scene = await PreviewSceneLoader.LoadAsync(client, bb2.Path, resources, excluded); tick = 0; }
 }
-// 25 Billboard3D + 2 RibbonFollow entries are drawable; entry 20 faults in the emulator (47ce9e4) when
-// loading, and any entry failing while advancing is excluded as above.
-Check(scene.Entries.Count == 31 && scene.Shown.Count + excluded.Count == 27 && scene.Shown.Count >= 24 && excluded.Values.All(v => v.StartsWith("原生模拟器")),
+// 25 Billboard3D + 2 RibbonFollow + 1 Mesh (entry 19) are drawable; an entry failing in the emulator while
+// loading or advancing is excluded as above.
+Check(scene.Entries.Count == 31 && scene.Shown.Count + excluded.Count == 28 && scene.Shown.Count >= 25 && excluded.Values.All(v => v.StartsWith("原生模拟器")),
     $"sm82_320_00: {scene.Shown.Count} of 31 entries are simulated, native exclusions {excluded.Count}",
     string.Join("; ", scene.Entries.Where(e => !e.Shown).Select(e => $"[{e.Position}] {e.Type}: {e.Excluded}")));
 int table13 = scene.TableOf(13);

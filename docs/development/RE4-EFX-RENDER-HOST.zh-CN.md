@@ -255,7 +255,7 @@ UV 矩形不放进实例：每个 .uvs 资源上传一张"（序列，帧）到�
 |---|---|---|
 | .tex | `GpuTexture` 从解包目录或游戏 pak 读取；`_SRGB` 格式用 sRGB 纹理，混合在线性 HDR 中进行 | 不需要 |
 | .uvs | ReeLib `UvsFile`（`VfxAssetCache.GetUvs` 已有）生成矩形表 | 资源查找替身必须按真实 .uvs 填写序列数与每序列帧数。当前替身合成 4 × 16 / 64 帧（README「替身与桩」），帧循环位置与 PlayMode 2 的杀死时刻都会错。承载器在 `load` 的资源表中把每个 .uvs 的帧数传过去 |
-| .mesh / .mdf2 | `GpuMesh` 与材质贴图 | 替身需要真实部件数（TypeMesh 部件动画按 MaxPartsNum 与部件数循环，规格 §4.3.11）；材质句柄 attr+0xc8 只需非空 |
+| .mesh / .mdf2 | `PreviewMeshData`：LOD0 每个 mesh group 一段索引；.mdf2 从 pak 读，取 Base* 贴图与 ColorParam，再套 entry 的覆盖属性 | 不需要真实网格：部件动画只读 MaxPartsNum（属性 +0x58，规格 §4.3.11）；网格替身 +0x168 非空、材质句柄 attr+0xc8 非空即可；渲染实例的 +0x1108 指向共享缓冲 |
 
 ## 5. 各 Type 的绘制方案
 
@@ -305,9 +305,20 @@ CPU 条带走 primitivevfx 家族，宽度展开未读，折中实现为同一�
 
 ### 5.6 TypeMesh
 
-- 朝向与缩放：欧拉角 + RotationOrder，缩放 (U·X, U·Y, U·Z) × 发射器缩放（乘积为推定，规格 §4.3.11）；Flags 位 1 的运动朝向待定位。
-- 实例：Mesh 实例 64 字节；部件索引来自粒子（写入位置待定位）。
-- 绘制：每个（entry，网格部件）一次 `glDrawElementsInstanced`。meshvfx 像素着色器未读，折中为不受光：贴图 × 粒子颜色 × ColorRate + EmissiveColor × EmissiveRate。
+已实现（`BillboardRenderer` 的 Mesh 模式，`PreviewMesh.cs`）：
+
+- 数据：辅助进程把类型块 +0x100 的部件记录（每槽 0x38 字节）放进 entry 的状态记录区导出（PROTOCOL v3，状态步长 0x38），子 Action 表按实例槽排列。部件 = 部件索引取整，夹在 mesh group 数内。
+- 朝向：按网格实例构建函数 3d2f8f0 组合，行向量 R · Q。R = 3d13e50(角度, [p+4] & 7)（经 3d296f0：角度槽 +0x9c..+0xa4，[p+4] & 0x2000 时加 +0xa8..+0xb0，发射器镜像 E+0x16c 位 7 时 Y、Z 取反）；3d13e50 与 Polygon 四元数规则的矩阵一致。Q = dfbc10(部件记录 +0x10)，即 3d31390 维护的 FrontAxis 对准速度的四元数（Flags 位 1 关时为单位）。R 是局部预旋转：FrontAxis 经 Q 对准速度，R 再让网格偏离它（如 spear 的 RotationX 80°）。exp_mesh_rotation 原生核对 3d13e50 与 dfbc10（误差 < 5e-7），Re4MeshTests 核对 Q 跟随速度（平滑 min(dt·k,1)，平均点积 0.997）。
+- 缩放与平移（折中）：缩放 (U·X, U·Y, U·Z)，[p+4] & 0x4000 时再乘 +0x90..+0x98；之后乘参考矩阵 P（+0x100）的线性部分，平移取粒子世界位置。缩放与 P 的先后取构建函数的主路径，其余分支未跟。
+- 实例：80 字节（mat4 世界矩阵 + 颜色、编号、寿命字节）；按部件排序，每个（entry，部件）一次 `glDrawElementsInstancedBaseInstance`。
+- 材质：.mdf2 从 pak（含 dlc/re_dlc_stm_*.pak，部分 Separate Ways 材质只在那里）读第一个材质的 Base* 贴图、NormalRoughnessMap（NRMR）、ColorParam、Metallic、Roughness，再套 entry 的覆盖属性。TypeMesh 用到的 89 个 .mdf2 全部找到；22 个是 shader_basic_standard（ALBM + NRMR，Metallic / Roughness 为 1），8 个是 TranslucencyLiquid（BaseMap，ColorParam 暗红，Roughness 0）。
+- UV 变换：网格没有 UVSequence，EFX 的 UVScroll 属性（类型 98）在 RE4 语料中只用于 TypeStrainRibbon（158 个），TypeMesh 为 0。网格的 UV 滚动是材质参数：shader_basic_standard 的像素着色器（.mmtr.221007879，SDF 包，ShaderDump 可切；变体 b048）在 `use_UVScroll > 0` 时把两张贴图的 UV 换成 `Offset + Scale · uv + frac(Speed · 0.001 · timeMillisecond)`（速度为 0 时没有时间项），开关关时 Scale、Offset 也不生效。timeMillisecond 是场景时钟，预览用播放时间代替（重播时从 0 开始）。语料：109 个 entry 覆盖 use_UVScroll = 1，579 个覆盖 U/V_Scale（其中 470 个没开开关，游戏里无效），没有 entry 覆盖速度或偏移，材质自身速度都为 0，所以官方特效里实际是贴图平铺，没有滚动。
+- 覆盖属性的取值：MaterialParameterType 1（Float）为 (min, max) 或 RGBA，2（Range）为 (min_a, min_b, max_a, max_b)。语料中 Float 标量 min = max，Range 的第一对全为 0；预览取 (min, max) / (max_a, max_b) 的中点作固定值，引擎是否按粒子或按发射器随机未读。
+- NRMR 按 mmtr 着色器读：法线取 RGB（z 存在 B，不重建），B = N × T（副切线符号为负时取反），G 不翻转；粗糙度 = Roughness × A；金属度写入 G-buffer 时为 max(0.04, Metallic × ALBM.a)。
+- 着色（折中，`MeshFragmentSource`）：按不透明处理（写深度，贴图 alpha 不作覆盖率，按 alpha 混合保留寿命淡出），双面。漫反射 = 贴图 × ColorParam × (1 − 金属度) × 粒子颜色 × ColorRate，受预览光照；法线取 NRMR（见上）；金属度 = ALBM alpha × Metallic（非 ALBM 时取 Metallic），粗糙度 = NRMR alpha × Roughness（无 NRMR 时取 Roughness）；主光的归一化 Blinn-Phong 高光与环境反射，F0 = mix(0.04, 贴图, 金属度)；Flags 位 27 置位时加 EmissiveColor × EmissiveRate。TranslucencyLiquid 的透射与 FlowSmoke、distortion 等专用材质的效果没有做。
+- 网格缺失：MeshPath 为空、找不到或读不出时，用 20 cm 的黄白格子方块代替（一个 group，所有部件都画它），路径记入 Missing，entry 照常模拟和显示；材质不再查找。
+- 不运行：带 AssignCSV 的 entry（7 个）在加载前排除。AssignCSV 用表格资源的行数做除数（3df20e0），资源替身的行数为 0，原生会除零；要支持须把表格资源读进替身。带 PtColliderAction 的 entry 在 3d62ce8 的子 Action 遍历里故障，Billboard3D 同样如此，与网格无关，运行时按窗口的做法排除。
+- 验证：`tools/Re4MeshTests`（部件序列与原生一致；FrontAxis；`--corpus 2000` 逐个加载全部 1647 个含 TypeMesh 的文件：9806 个 TypeMesh entry 中 9639 个显示，160 个超出每文件 64 个 entry 的上限，7 个为 AssignCSV；另有 116 个在子 Action 中显示；网格专有的原生故障为 0；57 个粒子帧的位置本身是模拟给出的 NaN（Transform3DExpression），渲染时跳过），窗口截图核对木屑碎块、血液飞溅（高光）。
 
 ### 5.7 TypeNoDraw
 
@@ -489,7 +500,7 @@ LiveEditor 后台（`EditorEngine`）是 EFX 文档的唯一权威，游戏内 U
 | P2 扩展预留：属性模块组装（功能愿望） | §8.4；在基础编辑与重载稳定后，支持把属性拖入发射器、删除、复制和结构撤销；每次结构修改从 tick 0 重播 | 受支持属性组装后能重载并从头出现效果；组合规则和资源依赖有效；结构撤销与保存再读正确。不阻塞 P3 |
 | P3 外观链 | 一个 EFX 文件的全部 CPU entry；多 entry 的局部重建（有子 Action 依赖时整体重建）；FadeBy*、AlphaCorrection、ShaderSettings（软粒子、DepthBias、DetonemapRatio）、RgbCommon / RgbWater、BlendType 2–4；排序；合成配置面板；深度纹理 | 各公式的着色器单元测试（给定输入与规格公式的 C# 实现逐值比较）；含 10 个以上 entry 的官方文件无 NaN、无原生故障 |
 | P4 条带族与 Polygon | §4.5 点缓冲定位与导出；§5.3–§5.5 | 每种类型至少一个官方 entry：承载器解码出的点与辅助进程原样记录一致；宽度、V 方向与游戏录像一致 |
-| P5 Mesh、Distortion、挂点 | .mesh / .mdf2 真实部件数进入辅助进程；实例化网格；Distortion 通道；角色骨骼动画驱动发射器矩阵轨道；ParentOptions 骨骼查找改为承载器提供的关节矩阵 | 挂在骨骼上的官方特效随动作移动；§4.3 的世界变换按 3dfca50 的 C# 重写，原生比对开关下误差 < 1e-5 |
+| P5 Mesh（CPU TypeMesh 已完成，§5.6）、Distortion、挂点 | .mesh / .mdf2 真实部件数进入辅助进程；实例化网格；Distortion 通道；角色骨骼动画驱动发射器矩阵轨道；ParentOptions 骨骼查找改为承载器提供的关节矩阵 | 挂在骨骼上的官方特效随动作移动；§4.3 的世界变换按 3dfca50 的 C# 重写，原生比对开关下误差 < 1e-5 |
 | P6 子 Action 与 GPU 类型 | 嵌套资源加载器 3cfadc0，子 Action 真正运行；GPU 类型的数据源（§5.8、§8.1） | PtLife、PtColliderAction 触发的子发射器在正确位置出现；GPU 类型有近似画面并标注"近似" |
 | P7（可选）引擎实例流与 D3D12 对照 | slot 27 实例写入器 + 渲染器替身（§4.6）；离屏 D3D12 用游戏 DXIL 绘制对照图 | 同一帧 GL 与 D3D12 对照图的差异可定位到具体折中项 |
 

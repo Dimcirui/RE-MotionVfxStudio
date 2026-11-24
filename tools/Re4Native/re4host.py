@@ -21,7 +21,11 @@ ENTRY_SIZE = 160
 STRIDE = 0x140
 VERSION = 3
 # Drawable Type attribute -> companion attributes allowed with it (Expression / Clip).
-DRAWABLE = {21: {22}, 23: {24}, 63: {64, 65}, 31: set(), 32: {58}, 34: {60}, 70: set()}
+DRAWABLE = {21: {22}, 23: {24}, 63: {64, 65}, 31: set(), 32: {58}, 34: {60}, 70: set(), 28: {29, 30}}
+# TypeMesh 28 (+ TypeMeshClip 29, TypeMeshExpression 30): per-particle records at type block +0x100, 0x38 bytes per
+# slot (+0 part index as float, +4 play speed in parts per second, +8 PlaySpeedCoef; 3d30b60 / 3d31049). They go out
+# in the state-record range of the entry (strip_state) with stride 0x38 and no points.
+TYPE_MESH, MESH_RECORD_STRIDE = 28, 0x38
 # Simulated but not drawn: NoDraw entries mostly exist to carry PtLife triggers for child Actions.
 LOGIC_ONLY = {75: {76}}   # TypeNoDraw (+ TypeNoDrawExpression)
 PTLIFE_TYPE = 131
@@ -66,6 +70,7 @@ class Snapshot:
             if isinstance(obj, ctypes.Array):
                 self.regions.append((ctypes.addressof(obj), bytes(obj)))
         self.resources = dict(em.RESOURCES)
+        self.mesh_sink = list(em.MESH_SINK)   # arena address: valid only while the arena is rewound to here
         self.bytes = sum(len(b) for _, b in self.regions)
 
     def restore(self):
@@ -79,6 +84,7 @@ class Snapshot:
         del self.img._keep[self.keep_count:]
         em.RESOURCES.clear()
         em.RESOURCES.update(self.resources)
+        em.MESH_SINK[:] = self.mesh_sink
         em.CALLS.clear()
 
 
@@ -200,6 +206,9 @@ class Host:
                     data_offset += meta['strip_bytes']
                     meta.update(strip_state=data_offset, strip_state_bytes=n * RIBBON_STATE_STRIDE)
                     data_offset += meta['strip_state_bytes']
+                if type_id == TYPE_MESH:
+                    meta.update(strip_state=data_offset, strip_state_bytes=n * MESH_RECORD_STRIDE)
+                    data_offset += meta['strip_state_bytes']
                 self.emitters.append(e)
                 self.meta.append(meta)
                 self.spec_of.append(spec)
@@ -228,6 +237,24 @@ class Host:
                     reused=reused, base_restore_ms=base_ms, skipped=skipped)
 
     @staticmethod
+    def state_stride(meta):
+        if not meta['strip_state_bytes']:
+            return 0
+        return MESH_RECORD_STRIDE if meta['type'] == TYPE_MESH else RIBBON_STATE_STRIDE
+
+    @staticmethod
+    def mesh_records(block, meta, out, slot=0):
+        """Copy a TypeMesh emitter's per-particle records (block +0x100) into its state range; slot = instance slot
+        of a child table."""
+        length = meta.get('per_instance', meta['capacity']) * MESH_RECORD_STRIDE
+        records = rn.u64(block + 0x100)
+        target = out + meta['strip_state'] + slot * length
+        if records:
+            ctypes.memmove(target, records, length)
+        else:
+            ctypes.memset(target, 0, length)
+
+    @staticmethod
     def primary_type(entry, logic=False):
         """The entry's Type attribute id, checked against what the preview runs (with its Expression / Clip
         companions); NoDraw only when the caller asks for logic-only entries."""
@@ -235,7 +262,7 @@ class Host:
         types = [a["type"] for a in entry.attrs if 21 <= a["type"] <= 76]
         primary = [t for t in types if t in allowed]
         if len(primary) != 1 or not set(types) <= {primary[0]} | allowed[primary[0]]:
-            raise ValueError(f'requires one drawable Type attribute (Billboard2D, Billboard3D, Polygon, RibbonFollow, RibbonLength, RibbonFixEnd, PolygonTrail) with its companions; found {types}')
+            raise ValueError(f'requires one drawable Type attribute (Billboard2D, Billboard3D, Polygon, RibbonFollow, RibbonLength, RibbonFixEnd, PolygonTrail, Mesh) with its companions; found {types}')
         return primary[0]
 
     def build_children(self, cmd, data_offset, skipped):
@@ -288,6 +315,9 @@ class Host:
                             strip=0, strip_bytes=0, strip_points=0, strip_state=0, strip_state_bytes=0,
                             action=k, child=child['index'], instances=len(sources), per_instance=n)
                 data_offset += pbytes + sbytes + 0x2f8
+                if child['type'] == TYPE_MESH:
+                    meta.update(strip_state=data_offset, strip_state_bytes=total * MESH_RECORD_STRIDE)
+                    data_offset += meta['strip_state_bytes']
                 self.meta.append(meta)
                 self.child_tables.append(dict(template=child, sources=set(sources), order=sources, meta=meta))
         return data_offset
@@ -348,6 +378,8 @@ class Host:
         n, side = meta['per_instance'], meta['side_stride']
         c = index - self.top_count
         ctypes.memset(address + base + meta['particles'], 0, meta['particle_bytes'])
+        if meta['strip_state_bytes']:
+            ctypes.memset(address + base + meta['strip_state'], 0, meta['strip_state_bytes'])
         if meta['side_bytes']:
             ctypes.memset(address + base + meta['side'], 0, meta['side_bytes'])
         source = None
@@ -360,6 +392,8 @@ class Host:
             ctypes.memmove(address + base + meta['particles'] + slot * n * STRIDE, rn.u64(e.E + 0x190), n * STRIDE)
             if side:
                 ctypes.memmove(address + base + meta['side'] + slot * n * side, rn.u64(e.E + 0x198), n * side)
+            if meta['type'] == TYPE_MESH:
+                self.mesh_records(e.block_of(TYPE_MESH), meta, address + base, slot)
         source = source or tpl['probe']
         pos = base + SLOT_HEADER + index * ENTRY_SIZE
         flags = [rn.u32(source.E + off) for off in (0x168, 0x16c, 0x170, 0x174)]
@@ -368,7 +402,8 @@ class Host:
                          meta['side'], meta['side_bytes'], meta['block'], meta['block_bytes'])
         struct.pack_into('<16f', self.mapping, pos + 64, *IDENTITY)
         ctypes.memmove(address + base + meta['block'], source.block_of(meta['type']), meta['block_bytes'])
-        struct.pack_into('<8I', self.mapping, pos + 128, 0, 0, 0, 0, 0, 0, 0, 0)
+        struct.pack_into('<8I', self.mapping, pos + 128, 0, 0, 0, 0, meta['strip_state'], meta['strip_state_bytes'],
+                         self.state_stride(meta), 0)
         if diagnostics:
             raw = self.mapping[base + meta['particles']:base + meta['particles'] + meta['particle_bytes']]
             hashes.append(hashlib.sha256(raw).hexdigest())
@@ -516,7 +551,9 @@ class Host:
             ctypes.memmove(address + base + meta['block'], block, meta['block_bytes'])
             struct.pack_into('<8I', self.mapping, pos + 128, meta['strip'], meta['strip_bytes'], POINT_STRIDE if meta['strip_bytes'] else 0,
                              meta['strip_points'], meta['strip_state'], meta['strip_state_bytes'],
-                             RIBBON_STATE_STRIDE if meta['strip_state_bytes'] else 0, 0)
+                             self.state_stride(meta), 0)
+            if meta['type'] == TYPE_MESH:
+                self.mesh_records(block, meta, address + base)
             if meta['strip_bytes']:
                 if meta['type'] == 70:
                     self.trail_columns(block, meta, address + base)
