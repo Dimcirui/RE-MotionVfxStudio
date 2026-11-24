@@ -13,13 +13,13 @@
       "samples": 8,
       "fields": {
         "unkn0": "2",
-        "unkn1": "1",
-        "unkn3": "0.2",
-        "unkn5": "1",
-        "unkn8": "0.5",
-        "unkn10": "0.1",
-        "radians12": "0.017453292",
-        "radians14": "1"
+        "Radius.s": "1",
+        "AddRadius.s": "0.2",
+        "AddRadiusCoef": "1",
+        "RotationScaleX.s": "0.5",
+        "RotationScaleY.s": "0.1",
+        "RotationSpeed.s": "0.017453292",
+        "RotationSpeedCoef": "1"
       }
     },
     "AngularVelocity3D": {
@@ -90,8 +90,8 @@
       "samples": 249,
       "fields": {
         "unkn0": "72",
-        "unkn1": "0.2",
-        "unkn2": "53.99"
+        "Distance": "0.2",
+        "YNormalRange": "53.99"
       }
     },
     "Distortion": {
@@ -231,25 +231,25 @@
         "unkn4": "4",
         "unkn5": "0.01",
         "unkn6": "0.05",
-        "unkn7": "0.85",
+        "PostEdgeDropoff": "0.85",
         "unkn8": "0.25",
         "unkn12": "63",
         "unkn13": "1",
         "unkn14": "1",
-        "unkn16": "1",
-        "unkn17": "0.1",
-        "unkn18": "5",
+        "DensityColorMax": "1",
+        "DensityAlphaMin": "0.1",
+        "DensityAlphaMax": "5",
         "unkn22": "63",
         "re4_unkn1": "0.5",
         "re4_unkn2": "0.5",
         "unkn1_23": "0.008",
         "unkn1_24": "0.1",
         "unkn1_25": "0.0075",
-        "unkn1_26": "1",
+        "InternalInherit": "1",
         "unkn1_27": "0.1",
-        "unkn1_28_re8": "0.5",
-        "unkn1_29_re8": "1",
-        "unkn1_30": "0.2",
+        "FlowStrength": "0.5",
+        "ProjectionAdjustment": "1",
+        "ProjectionTimeScale": "0.2",
         "unkn1_35": "0.1",
         "re4_unk2_0": "0.1",
         "re4_unk2_3": "3",
@@ -422,11 +422,11 @@
       "fields": {
         "ColorOperator": "PtColorOperator_Multiply",
         "AlphaOperator": "PtColorOperator_Multiply",
-        "Color.rgba": "4294967295",
-        "Color.R": "255",
-        "Color.G": "255",
-        "Color.B": "255",
-        "Color.A": "255"
+        "ElementColor.rgba": "4294967295",
+        "ElementColor.R": "255",
+        "ElementColor.G": "255",
+        "ElementColor.B": "255",
+        "ElementColor.A": "255"
       }
     },
     "PtColorClip": {
@@ -1636,7 +1636,7 @@
         "unkn2": "1",
         "unkn3": "2",
         "unkn6": "1",
-        "unkn7": "30",
+        "Speed": "30",
         "unkn8": "1",
         "unkn11": "10",
         "unkn12": "50",

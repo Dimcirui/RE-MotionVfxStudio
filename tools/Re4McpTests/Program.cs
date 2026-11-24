@@ -58,7 +58,7 @@ try
     await server.StandardInput.WriteLineAsync(new JsonObject { ["jsonrpc"] = "2.0", ["method"] = "notifications/initialized" }.ToJsonString());
     var list = await Rpc("tools/list");
     var names = list["result"]!["tools"]!.AsArray().Select(t => t!["name"]!.GetValue<string>()).ToArray();
-    Check(names.Length == 26 && names.All(n => n.StartsWith("re4preview_")), "tools/list returns the 26 preview tools", string.Join(",", names));
+    Check(names.Length == 31 && names.All(n => n.StartsWith("re4preview_")), "tools/list returns the 31 preview tools", string.Join(",", names));
 
     var (error, outcome, _) = await Tool("status");
     Check(error && Code(outcome) == "preview_not_running", "status without a window reports preview_not_running", outcome.ToJsonString());
@@ -90,8 +90,17 @@ try
     Check(!error && outcome["result"]?["document"]?["entryPosition"]?.GetValue<int>() == 12 && Revision(outcome) == revBefore &&
         outcome["result"]?["preview"]?["displayedTick"]?.GetValue<int>() == 45 && outcome["result"]?["document"]?["attributes"]?.AsArray().Count > 0,
         "select_entry switches the edited entry without a revision or a timeline change", outcome.ToJsonString());
+    // A Mesh entry is not drawn, but it can be the edited entry (its attributes and material overrides are editable).
     (error, outcome, _) = await Tool("select_entry", new JsonObject { ["entryPosition"] = 19 });
-    Check(error && Code(outcome) == "backend_rejected", "a Mesh entry cannot be selected for editing", outcome.ToJsonString());
+    Check(!error && outcome["result"]?["document"]?["entryPosition"]?.GetValue<int>() == 19 &&
+        outcome["result"]?["document"]?["attributes"]?.AsArray().Any(a => a!["type"]?.GetValue<string>() == "TypeMesh") == true &&
+        outcome["result"]?["preview"]?["entries"]?.AsArray().Any(e => e!["position"]!.GetValue<int>() == 19 && !e["shown"]!.GetValue<bool>()) == true,
+        "a Mesh entry can be selected for editing but is not drawn", outcome.ToJsonString());
+    // Editing does not depend on drawing: even Root (no Type attribute) can be the edited entry and inspected.
+    (error, outcome, _) = await Tool("select_entry", new JsonObject { ["entryPosition"] = 0 });
+    Check(!error && outcome["result"]?["document"]?["entryPosition"]?.GetValue<int>() == 0, "the Root entry (no Type) can be selected for editing", outcome.ToJsonString());
+    (error, outcome, _) = await Tool("inspect", new JsonObject { ["attributeIndex"] = 0 });
+    Check(!error && outcome["result"]?["fields"]?.AsArray().Count > 0, "a Root attribute can be inspected", outcome.ToJsonString());
     (error, outcome, _) = await Tool("select_entry", new JsonObject { ["entryPosition"] = 13 });
     Check(!error && outcome["result"]?["document"]?["entryPosition"]?.GetValue<int>() == 13, "select_entry returns to entry 13");
     (error, outcome, _) = await Tool("inspect");
@@ -309,7 +318,8 @@ try
         rev = error ? rev : Revision(outcome);
         for (int i = 0; i < 4; i++) { (error, outcome, _) = await Tool("undo", new JsonObject { ["expectedRevision"] = rev }); rev = error ? rev : Revision(outcome); }
         (error, outcome, _) = await Tool("select_entry", new JsonObject { ["entryPosition"] = 13 });
-        Check(!error && Entries(outcome) == entryCount && Selected(outcome) == 13 && outcome["result"]?["previewError"] == null, "undo removes the four entry edits; entry 13 is selected again", Entries(outcome));
+        Check(!error && Entries(outcome) == entryCount && Selected(outcome) == 13 && outcome["result"]?["previewError"] == null, "undo removes the four entry edits; entry 13 is selected again",
+            $"entries {Entries(outcome)} (expected {entryCount}), selected {Selected(outcome)}, previewError {outcome["result"]?["previewError"]}, error {(error ? outcome.ToJsonString()[..Math.Min(300, outcome.ToJsonString().Length)] : "none")}");
         rev = error ? rev : Revision(outcome);
         // A decal carrier: NoDraw + an EffectDecal PtBehavior with RE4's usual parameters; then undone.
         (error, outcome, _) = await Tool("add_entry", new JsonObject { ["script"] = "via.effect.script.EffectDecal", ["expectedRevision"] = rev });
@@ -379,6 +389,95 @@ try
         Check(curveDone != null, "an emitter with an editable curve exercises curve_key");
     }
     Console.WriteLine("  curve_key exercised on " + curveDone);
+
+    // An entry embedded in an Action's PlayEmitter: listed in status, selected with embeddedPath, inspected and edited
+    // like a top-level one; the preview stays on its top-level entry and shows the new revision.
+    {
+        string damage = Path.Combine(Path.GetDirectoryName(Environment.GetEnvironmentVariable("RE4_EXE") ?? @"E:\Program\Steam\steamapps\common\RESIDENT EVIL 4  BIOHAZARD RE4\re4.exe")!,
+            @"RE4_EXTRACT\natives\stm\_anotherorder\vfx\effecteditor\efd_character\efd_ao_chfa\efd_0015_ao_chfa_0000_damage_0000.efx.3539837");
+        (error, outcome, _) = await Tool("open", new JsonObject { ["path"] = damage, ["entryPosition"] = 0, ["discardUnsaved"] = true });
+        Check(!error, "open a file whose Action embeds entries", outcome.ToJsonString());
+        (error, outcome, _) = await Tool("status");
+        var embeddedEntry = outcome["result"]?["preview"]?["embeddedEntries"]?.AsArray().FirstOrDefault();
+        Check(!error && embeddedEntry?["embeddedPath"]?.AsArray().Count == 1, "status lists embedded entries with their embeddedPath", outcome.ToJsonString());
+        long embeddedBefore = Revision(outcome);
+        (error, outcome, _) = await Tool("select_entry", new JsonObject { ["entryPosition"] = embeddedEntry?["entryPosition"]?.GetValue<int>() ?? 0,
+            ["embeddedPath"] = embeddedEntry?["embeddedPath"]?.DeepClone() });
+        var embeddedDocument = outcome["result"]?["document"];
+        Check(!error && embeddedDocument?["editTarget"]?["embeddedPath"]?.AsArray().Count == 1 && embeddedDocument["entryPosition"]?.GetValue<int>() == 0 &&
+            Revision(outcome) == embeddedBefore && embeddedDocument["attributes"]?.AsArray().Count > 0,
+            "select_entry with embeddedPath edits the embedded entry and keeps the preview entry", outcome.ToJsonString());
+        int embeddedLife = embeddedDocument?["attributes"]?.AsArray().FirstOrDefault(a => a!["type"]!.GetValue<string>() == "Life")?["index"]?.GetValue<int>() ?? -1;
+        (error, outcome, _) = await Tool("inspect", new JsonObject { ["attributeIndex"] = Math.Max(0, embeddedLife) });
+        string? appear = outcome["result"]?["fields"]?.AsArray().FirstOrDefault(f => f!["path"]!.GetValue<string>() == "AppearFrame.max")?["value"]?.GetValue<string>();
+        Check(!error && embeddedLife >= 0 && appear != null, "inspect reads the embedded entry's Life", outcome.ToJsonString());
+        string nextAppear = ((int.TryParse(appear, out int a0) ? a0 : 0) + 1).ToString();
+        (error, outcome, _) = await Tool("set_fields", new JsonObject { ["attributeIndex"] = embeddedLife,
+            ["fields"] = new JsonArray(new JsonObject { ["path"] = "AppearFrame.max", ["value"] = nextAppear }), ["expectedRevision"] = embeddedBefore });
+        Check(!error && Revision(outcome) == embeddedBefore + 1 && outcome["result"]?["preview"]?["displayedRevision"]?.GetValue<long>() == embeddedBefore + 1,
+            "set_fields on the embedded entry is one revision and the preview shows it", outcome.ToJsonString());
+        (error, outcome, _) = await Tool("inspect", new JsonObject { ["attributeIndex"] = embeddedLife });
+        Check(!error && outcome["result"]?["fields"]?.AsArray().Any(f => f!["path"]!.GetValue<string>() == "AppearFrame.max" && f["value"]!.GetValue<string>() == nextAppear) == true,
+            "the embedded edit reads back", outcome.ToJsonString());
+        (error, outcome, _) = await Tool("select_entry", new JsonObject { ["entryPosition"] = 0 });
+        Check(!error && outcome["result"]?["document"]?["editTarget"] == null, "select_entry without embeddedPath returns to the top-level entry", outcome.ToJsonString());
+        (error, outcome, _) = await Tool("select_entry", new JsonObject { ["entryPosition"] = 999, ["embeddedPath"] = embeddedEntry?["embeddedPath"]?.DeepClone() });
+        Check(error, "select_entry refuses an embedded entry that does not exist", outcome.ToJsonString());
+
+        // The Action itself: listed in status, selected with actionIndex; attribute_types offers what an Action holds.
+        (error, outcome, _) = await Tool("status");
+        var firstAction = outcome["result"]?["preview"]?["actions"]?.AsArray().FirstOrDefault();
+        Check(!error && firstAction?["attributes"]?.AsArray().Any(t => t!.GetValue<string>() == "PlayEmitter") == true, "status lists Actions with their attributes", outcome.ToJsonString());
+        (error, outcome, _) = await Tool("select_entry", new JsonObject { ["actionIndex"] = firstAction?["actionIndex"]?.GetValue<int>() ?? 0 });
+        Check(!error && outcome["result"]?["document"]?["editTarget"]?["kind"]?.GetValue<string>() == "action" &&
+            outcome["result"]?["document"]?["attributes"]?.AsArray().Any(a => a!["type"]!.GetValue<string>() == "PlayEmitter") == true &&
+            outcome["result"]?["document"]?["entryPosition"]?.GetValue<int>() == 0, "select_entry with actionIndex edits the Action", outcome.ToJsonString());
+        (error, outcome, _) = await Tool("attribute_types");
+        var actionItems = outcome["result"]?["catalog"]?["items"]?.AsArray() ?? new JsonArray();
+        string? ActionStatus(string type) => actionItems.FirstOrDefault(i => i!["type"]!.GetValue<string>() == type)?["status"]?.GetValue<string>();
+        Check(!error && outcome["result"]?["catalog"]?["owner"]?.GetValue<string>() == "action" && ActionStatus("PlayEmitter") == "present" &&
+            ActionStatus("PlayEfx") == "common" && ActionStatus("Life") == "entryOnly", "attribute_types on an Action offers PlayEmitter / PlayEfx only", outcome["result"]?["catalog"]?["owner"]?.ToJsonString());
+        (error, outcome, _) = await Tool("select_entry", new JsonObject { ["entryPosition"] = 0, ["actionIndex"] = 0 });
+        Check(error, "select_entry refuses entryPosition together with actionIndex", outcome.ToJsonString());
+        (error, outcome, _) = await Tool("select_entry", new JsonObject { ["entryPosition"] = 0 });
+        Check(!error && outcome["result"]?["document"]?["editTarget"] == null, "select_entry returns from the Action to the top-level entry", outcome.ToJsonString());
+
+        // Entry tools inside the embedded file: add selects the new embedded entry, duplicate and remove use that file's
+        // positions, and the top-level entries do not change.
+        (error, outcome, _) = await Tool("status");
+        int embeddedCount = outcome["result"]?["preview"]?["embeddedEntries"]?.AsArray().Count ?? 0;
+        int topCount = outcome["result"]?["preview"]?["entries"]?.AsArray().Count ?? 0;
+        long entryOpsBefore = Revision(outcome);
+        (error, outcome, _) = await Tool("add_entry", new JsonObject { ["type"] = "TypeBillboard3D", ["embeddedPath"] = embeddedEntry?["embeddedPath"]?.DeepClone(), ["expectedRevision"] = entryOpsBefore });
+        Check(!error && Revision(outcome) == entryOpsBefore + 1 && outcome["result"]?["document"]?["editTarget"]?["index"]?.GetValue<int>() == embeddedCount &&
+            outcome["result"]?["preview"]?["embeddedEntries"]?.AsArray().Count == embeddedCount + 1 && outcome["result"]?["preview"]?["entries"]?.AsArray().Count == topCount,
+            "add_entry with embeddedPath appends to the embedded file and selects the new entry", outcome.ToJsonString());
+        (error, outcome, _) = await Tool("duplicate_entry", new JsonObject { ["entryPosition"] = 0, ["embeddedPath"] = embeddedEntry?["embeddedPath"]?.DeepClone(), ["expectedRevision"] = entryOpsBefore + 1 });
+        Check(!error && outcome["result"]?["preview"]?["embeddedEntries"]?.AsArray().Count == embeddedCount + 2, "duplicate_entry with embeddedPath copies inside the embedded file", outcome.ToJsonString());
+        (error, outcome, _) = await Tool("select_entry", new JsonObject { ["entryPosition"] = 0 });
+        (error, outcome, _) = await Tool("remove_entry", new JsonObject { ["entryPosition"] = embeddedCount, ["embeddedPath"] = embeddedEntry?["embeddedPath"]?.DeepClone(), ["expectedRevision"] = entryOpsBefore + 2 });
+        Check(!error && outcome["result"]?["preview"]?["embeddedEntries"]?.AsArray().Count == embeddedCount + 1 && outcome["result"]?["preview"]?["entries"]?.AsArray().Count == topCount,
+            "remove_entry with embeddedPath removes from the embedded file only", outcome.ToJsonString());
+
+        // Action tools: add, copy/paste and remove; removal is refused while a trigger starts the Action.
+        (error, outcome, _) = await Tool("status");
+        int actionCount = outcome["result"]?["preview"]?["actions"]?.AsArray().Count ?? 0;
+        long actionOpsBefore = Revision(outcome);
+        (error, outcome, _) = await Tool("add_action", new JsonObject { ["expectedRevision"] = actionOpsBefore });
+        Check(!error && outcome["result"]?["document"]?["editTarget"]?["kind"]?.GetValue<string>() == "action" &&
+            outcome["result"]?["document"]?["editTarget"]?["index"]?.GetValue<int>() == actionCount &&
+            outcome["result"]?["preview"]?["actions"]?.AsArray().Count == actionCount + 1, "add_action appends a PlayEfx Action and selects it", outcome.ToJsonString());
+        (error, outcome, _) = await Tool("copy_action", new JsonObject { ["actionIndex"] = 0 });
+        string? actionClip = outcome["result"]?["copyBuffer"]?["id"]?.GetValue<string>();
+        Check(!error && outcome["result"]?["copyBuffer"]?["kind"]?.GetValue<string>() == "action", "copy_action fills the copy buffer", outcome.ToJsonString());
+        (error, outcome, _) = await Tool("paste_action", new JsonObject { ["clipboardId"] = actionClip ?? "", ["expectedRevision"] = actionOpsBefore + 1 });
+        Check(!error && outcome["result"]?["preview"]?["actions"]?.AsArray().Count == actionCount + 2, "paste_action appends the copied Action", outcome.ToJsonString());
+        (error, outcome, _) = await Tool("remove_action", new JsonObject { ["actionIndex"] = 0, ["expectedRevision"] = actionOpsBefore + 2 });
+        Check(error && (outcome["error"]?["message"]?.GetValue<string>() ?? "").Contains("clearTriggers"), "remove_action refuses a triggered Action without clearTriggers", outcome.ToJsonString());
+        (error, outcome, _) = await Tool("remove_action", new JsonObject { ["actionIndex"] = actionCount, ["expectedRevision"] = actionOpsBefore + 2 });
+        Check(!error && outcome["result"]?["preview"]?["actions"]?.AsArray().Count == actionCount + 1 && outcome["result"]?["document"]?["editTarget"] == null,
+            "remove_action removes an untriggered Action and returns to the top-level entry", outcome.ToJsonString());
+    }
 
     (error, outcome, _) = await Tool("close", new JsonObject { ["discardUnsaved"] = true });
     Check(!error, "close is accepted");

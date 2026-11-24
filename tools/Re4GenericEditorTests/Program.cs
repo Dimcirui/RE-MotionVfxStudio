@@ -67,6 +67,27 @@ try
         Console.WriteLine("PASS mode conditions: enum, bits, non-zero, Any / All, draft values, missing field counts as met");
     }
 
+    // Edit targets: a top-level entry, an entry inside an Action's PlayEmitter, and how they are found in the backend's
+    // document tree. Equality is by value (the path is a list), so a target read again from JSON matches the old one.
+    {
+        var top=PreviewEditTarget.Root(3);
+        var nested=new PreviewEditTarget("entry",2,[new("action",1,0)]);
+        var again=PreviewEditTarget.Parse("entry",2,JsonNode.Parse("""[{"kind":"action","index":1,"attributeIndex":0}]"""));
+        Check(top.IsRoot && !nested.IsRoot && nested.Equals(again) && nested.GetHashCode()==again.GetHashCode() && !nested.Equals(top),"Edit target equality");
+        Check(top.ToJson(4).ToJsonString()=="{\"kind\":\"entry\",\"index\":3,\"attributeIndex\":4}" &&
+            nested.ToJson(5)["embeddedPath"]![0]!["attributeIndex"]!.GetValue<int>()==0 && nested.Label=="Action 1 › 属性 0 › [2]","Edit target JSON and label");
+        var doc=JsonNode.Parse("""
+            {"entries":[{"index":0,"attributes":[]}],"actions":[{"index":0,"attributes":[]},{"index":1,"attributes":[
+            {"index":0,"type":"PlayEmitter","embedded":{"entries":[{"index":0,"attributes":[]},{"index":1,"attributes":[]},{"index":2,"attributes":[{"index":0,"type":"Life"}]}],"actions":[]}}]}]}
+            """);
+        Check(nested.Find(doc)?["attributes"]?[0]?["type"]?.GetValue<string>()=="Life" && top.Find(doc)==null &&
+            new PreviewEditTarget("entry",3,[new("action",1,0)]).Find(doc)==null && new PreviewEditTarget("entry",0,[new("action",0,0)]).Find(doc)==null,
+            "Edit target lookup in the document tree");
+        foreach(var bad in new[]{"[{\"index\":0}]","[{\"kind\":\"group\",\"index\":0,\"attributeIndex\":0}]","{}"})
+            await Reject(()=>Task.FromResult(PreviewEditTarget.Parse("entry",0,JsonNode.Parse(bad))),"malformed embeddedPath "+bad);
+        Console.WriteLine("PASS edit targets: equality, JSON, label, document lookup, malformed paths");
+    }
+
     string repo=Directory.GetCurrentDirectory();
     string exe=Environment.GetEnvironmentVariable("RE4_EXE")??@"E:\Program\Steam\steamapps\common\RESIDENT EVIL 4  BIOHAZARD RE4\re4.exe";
     string root=Path.Combine(repo,"test-output","re4-generic-"+Guid.NewGuid().ToString("N"));
@@ -243,5 +264,260 @@ try
     await Reject(()=>editor.ApplyFieldsAsync(new(life,[new("AppearFrame.min","11")])),"old document after reopen");
     File.WriteAllText(Path.Combine(root,"generic-result.json"),JsonSerializer.Serialize(new{status="PASS",saved,attributes=inspections.Count,nativeDigest=digest}));
     Console.WriteLine("PASS attribute inspection, atomic generic color/size/Life, native geometry/digest, stale document/revision, read-only, rollback, save/reopen; "+root);
+
+    // Material overrides on a TypeMesh entry (not drawn, but selectable): every existing override matches the
+    // referenced .mdf2; one parameter and one texture are added from it and removed again (each one revision, undoable);
+    // a duplicate is refused, and so is removing a parameter a material curve drives.
+    {
+        string stm=Path.Combine(Path.GetDirectoryName(exe)!,"RE4_EXTRACT","natives","stm");
+        int IdAt(string path,long start)
+        {
+            var efx=new ReeLib.EfxFile(new ReeLib.FileHandler(new MemoryStream(File.ReadAllBytes(path),false),path));efx.Read();
+            return efx.Entries.Single(e=>e.Start==start).index;
+        }
+        string meshFile=Path.Combine(stm,@"_anotherorder\vfx\effecteditor\efd_character\efd_ao_chc3\efd_0015_ao_chc3_hold_dead_0000.efx.3539837");
+        using var meshEditor=new PreviewEditorSession(repo,Path.Combine(root,"mesh"),protectedRoots:[Path.GetDirectoryName(exe)!]);
+        var ms=await meshEditor.OpenAsync(meshFile,IdAt(meshFile,24102));
+        int mesh=ms.Attributes!.Single(a=>a.Type=="TypeMesh").Index;
+        async Task<Dictionary<string,PreviewFieldInfo>> MeshFieldsAsync()
+        {
+            ms=await meshEditor.InspectAsync(ms.Manifest!.DocumentId,ms.Revision,mesh);
+            return ms.Inspection!.Fields.ToDictionary(f=>f.Path);
+        }
+        int Count(Dictionary<string,PreviewFieldInfo> f){int n=0;while(f.ContainsKey($"properties[{n}].PropertyNameUTF8Hash")) n++;return n;}
+        JsonObject Body(JsonObject b){b["target"]=new JsonObject{["kind"]="entry",["index"]=ms.Manifest!.EntryPosition,["attributeIndex"]=mesh};return b;}
+        var mf=await MeshFieldsAsync();
+        var reference=PreviewMaterialReference.FromResource(resources,mf["MaterialPath"].Value);
+        int before0=Count(mf);
+        var present=new HashSet<uint>();
+        for(int i=0;i<before0;i++)
+        {
+            string F(string leaf)=>mf[$"properties[{i}].{leaf}"].Value;
+            uint hash=uint.Parse(F("PropertyNameUTF8Hash"),CultureInfo.InvariantCulture);present.Add(hash);
+            string? why=reference.Mismatch(hash,int.Parse(F("mdfPropertyIndex"),CultureInfo.InvariantCulture),int.Parse(F("mdfParameterValueCount"),CultureInfo.InvariantCulture),F("parameterType")=="Texture");
+            Check(why==null,$"Existing override {hash} does not match {reference.Source}: {why}");
+        }
+        var slot=reference.Slots.First(s=>!s.Texture && !present.Contains(s.Hash));
+        long rev=ms.Revision;
+        ms=(await meshEditor.SendRawAsync("material_parameter",Body(PreviewMaterialReference.AddBody(slot,"properties")),rev)).State;
+        Check(ms.Revision==rev+1 && ms.CanUndo,"Adding a material override is not one undoable revision");
+        mf=await MeshFieldsAsync();
+        string A(string leaf)=>mf[$"properties[{before0}].{leaf}"].Value;
+        Check(Count(mf)==before0+1 && A("PropertyNameUTF8Hash")==slot.Hash.ToString(CultureInfo.InvariantCulture) &&
+            A("mdfPropertyIndex")==slot.Index.ToString(CultureInfo.InvariantCulture) &&
+            A("parameterType")==(slot.ComponentCount==4?"Float":"Range"),"Added override does not carry the material's name, index and type");
+        if(slot.ComponentCount==1)
+            Check(float.Parse(A("VectorValue.Z"),CultureInfo.InvariantCulture)==slot.Value.X && float.Parse(A("VectorValue.W"),CultureInfo.InvariantCulture)==slot.Value.X &&
+                float.Parse(A("VectorValue.X"),CultureInfo.InvariantCulture)==0,"A one-component override must start as (0, 0, v, v)");
+        await Reject(()=>meshEditor.SendRawAsync("material_parameter",Body(PreviewMaterialReference.AddBody(slot,"properties")),ms.Revision),"duplicate material override");
+        if(reference.Slots.FirstOrDefault(s=>s.Texture && !present.Contains(s.Hash)) is {} tex)
+        {
+            ms=(await meshEditor.SendRawAsync("material_parameter",Body(PreviewMaterialReference.AddBody(tex,"properties")),ms.Revision)).State;
+            mf=await MeshFieldsAsync();
+            Check(mf[$"properties[{before0+1}].texturePath"].Value==tex.TexturePath && mf[$"properties[{before0+1}].mdfPropertyIndex"].Value=="-1",
+                "Added texture override lost its path or index -1");
+            ms=(await meshEditor.SendRawAsync("material_parameter",Body(new(){["op"]="remove",["listPath"]="properties",["index"]=before0+1}),ms.Revision)).State;
+        }
+        ms=(await meshEditor.SendRawAsync("material_parameter",Body(new(){["op"]="remove",["listPath"]="properties",["index"]=before0}),ms.Revision)).State;
+        mf=await MeshFieldsAsync();
+        Check(Count(mf)==before0,"Removing the added override did not restore the table");
+        ms=await meshEditor.CommandAsync("undo");
+        mf=await MeshFieldsAsync();
+        Check(Count(mf)==before0+1,"Undo did not bring the removed override back");
+
+        // A parameter a TypeMeshClip curve drives cannot be removed.
+        string rippleFile=Path.Combine(stm,@"_anotherorder\vfx\effecteditor\efd_event\cs\efd_cse340_s00\efd_0015_cse340_s00_ripple_0000.efx.3539837");
+        ms=await meshEditor.OpenAsync(rippleFile,IdAt(rippleFile,57));
+        mesh=ms.Attributes!.Single(a=>a.Type=="TypeMesh").Index;
+        mf=await MeshFieldsAsync();
+        var efxRipple=new ReeLib.EfxFile(new ReeLib.FileHandler(new MemoryStream(File.ReadAllBytes(rippleFile),false),rippleFile));efxRipple.Read();
+        var curveHashes=efxRipple.Entries.Single(e=>e.Start==57).Attributes.OfType<ReeLib.Efx.IMaterialClipAttribute>()
+            .SelectMany(c=>c.MaterialClip.mdfProperties??Array.Empty<ReeLib.Efx.Structs.Common.EfxMaterialClip_Struct4>()).Select(p=>p.mdfPropertyHash).ToHashSet();
+        int driven=Enumerable.Range(0,Count(mf)).First(i=>curveHashes.Contains(uint.Parse(mf[$"properties[{i}].PropertyNameUTF8Hash"].Value,CultureInfo.InvariantCulture)));
+        long rippleRevision=ms.Revision;
+        await Reject(()=>meshEditor.SendRawAsync("material_parameter",Body(new(){["op"]="remove",["listPath"]="properties",["index"]=driven}),rippleRevision),"remove a curve-driven material override");
+        Check(meshEditor.State!.Revision==rippleRevision,"Refused removal changed the document");
+        Console.WriteLine($"PASS material overrides: {before0} existing match {Path.GetFileName(reference.Source.Split(" :: ")[^1])}; add/duplicate/texture/remove/undo; " +
+            $"curve-driven parameter kept (hash {mf[$"properties[{driven}].PropertyNameUTF8Hash"].Value})");
+    }
+
+    // Entries embedded in an Action's PlayEmitter are edited through the same session calls as top-level ones; the
+    // preview manifest stays on its top-level entry. A draft read from one target is refused on another.
+    {
+        string stm=Path.Combine(Path.GetDirectoryName(exe)!,"RE4_EXTRACT","natives","stm");
+        string damage=Path.Combine(stm,@"_anotherorder\vfx\effecteditor\efd_character\efd_ao_chfa\efd_0015_ao_chfa_0000_damage_0000.efx.3539837");
+        using var ee=new PreviewEditorSession(repo,Path.Combine(root,"embedded"),protectedRoots:[Path.GetDirectoryName(exe)!]);
+        var es=await ee.OpenAtAsync(damage,0);
+        int top=es.Manifest!.EntryPosition;
+        var tree=(await ee.SendRawAsync("status",new())).Reply["document"]!;
+        var hop=tree["actions"]!.AsArray().SelectMany(a=>a!["attributes"]!.AsArray().Where(x=>x!["embedded"]?["entries"]?.AsArray().Count>0)
+            .Select(x=>new PreviewEditHop("action",a!["index"]!.GetValue<int>(),x!["index"]!.GetValue<int>()))).First();
+        var nested=new PreviewEditTarget("entry",0,[hop]);
+        int expected=nested.Find(tree)!["attributes"]!.AsArray().Count;
+        es=await ee.SelectTargetAsync(nested);
+        Check(nested.Equals(es.EditTarget) && es.Attributes!.Length==expected && es.Manifest!.EntryPosition==top,"Selecting an embedded entry lists its attributes and keeps the preview entry");
+        // The first attribute with an editable number.
+        PreviewFieldInfo? number=null;int attribute=-1;
+        foreach(var a in es.Attributes!)
+        {
+            es=await ee.InspectAsync(es.Manifest!.DocumentId,es.Revision,a.Index);
+            number=es.Inspection!.Fields.FirstOrDefault(f=>f.Editable && f.Type=="System.Single" && float.TryParse(f.Value,CultureInfo.InvariantCulture,out _));
+            if(number!=null) {attribute=a.Index;break;}
+        }
+        Check(number!=null && nested.Equals(es.Inspection!.EditTarget),"An embedded attribute can be inspected");
+        string original=number!.Value,next=(float.Parse(original,CultureInfo.InvariantCulture)+0.25f).ToString("R",CultureInfo.InvariantCulture);
+        long rev=es.Revision;
+        es=await ee.ApplyFieldsAsync(new(es.Inspection!,[new(number.Path,next)]));
+        Check(es.Revision==rev+1 && nested.Equals(es.EditTarget) && es.Manifest!.Revision==es.Revision,"Editing an embedded field is one revision and republishes the file");
+        es=await ee.InspectAsync(es.Manifest!.DocumentId,es.Revision,attribute);
+        Check(es.Inspection!.Fields.Single(f=>f.Path==number.Path).Value==next,"Embedded field edit did not stick");
+        var embeddedDraft=es.Inspection!;
+        es=await ee.SelectEntryAsync(top);
+        Check(es.Target==null && es.EditTarget!.IsRoot,"Selecting a top-level entry leaves the embedded one");
+        await Reject(()=>ee.ApplyFieldsAsync(new(embeddedDraft,[new(number.Path,original)])),"embedded draft applied to a top-level entry");
+        await Reject(()=>ee.SelectTargetAsync(new("entry",9999,[hop])),"embedded entry that does not exist");
+        Check(ee.State!.EditTarget!.IsRoot && ee.State.Revision==es.Revision,"A refused selection keeps the current target");
+        es=await ee.CommandAsync("undo");
+        es=await ee.SelectTargetAsync(nested);
+        es=await ee.InspectAsync(es.Manifest!.DocumentId,es.Revision,attribute);
+        Check(es.Inspection!.Fields.Single(f=>f.Path==number.Path).Value==original,"Undo did not restore the embedded field");
+        Console.WriteLine($"PASS embedded entry: {nested.Label} ({expected} attributes) select/inspect/set/undo, preview stays on [{top}], stale draft refused");
+
+        // The Action itself: its PlayEmitter is inspected and edited like an entry attribute, the catalogue offers only
+        // PlayEmitter / PlayEfx, and swapping the PlayEmitter for a PlayEfx is two undoable revisions.
+        var action=new PreviewEditTarget("action",hop.Index,[]);
+        es=await ee.SelectTargetAsync(action);
+        Check(action.Equals(es.EditTarget) && es.Manifest!.EntryPosition==top && es.Attributes!.Any(a=>a.Type=="PlayEmitter"),"Selecting an Action lists its attributes");
+        int play=es.Attributes!.Single(a=>a.Type=="PlayEmitter").Index;
+        es=await ee.InspectAsync(es.Manifest!.DocumentId,es.Revision,play);
+        var playFields=es.Inspection!.Fields;
+        Console.WriteLine($"INSPECT PlayEmitter: {playFields.Length} fields; own: "+string.Join(",",playFields.Where(f=>!f.Path.StartsWith("efxrData",StringComparison.Ordinal)).Select(f=>f.Path+(f.Editable?"":"(ro)")+"="+f.Value)));
+        var playNumber=playFields.FirstOrDefault(f=>f.Editable && f.Type is "System.Single" or "System.Int32" or "System.UInt32" &&
+            !f.Path.StartsWith("efxrData",StringComparison.Ordinal) && !f.Path.Contains("Size",StringComparison.Ordinal));
+        if(playNumber!=null)
+        {
+            string was=playNumber.Value,now=playNumber.Type=="System.Single"?(float.Parse(was,CultureInfo.InvariantCulture)+1).ToString("R",CultureInfo.InvariantCulture):(long.Parse(was,CultureInfo.InvariantCulture)+1).ToString(CultureInfo.InvariantCulture);
+            long r0=es.Revision;
+            es=await ee.ApplyFieldsAsync(new(es.Inspection!,[new(playNumber.Path,now)]));
+            es=await ee.InspectAsync(es.Manifest!.DocumentId,es.Revision,play);
+            Check(es.Revision==r0+1 && es.Inspection!.Fields.Single(f=>f.Path==playNumber.Path).Value==now,"An Action field edit did not stick");
+            es=await ee.CommandAsync("undo");
+        }
+        var types=es.Attributes!.Select(a=>a.Type).ToArray();
+        var catalogue=PreviewAttributeCatalog.Re4.For(null,types,action:true).ToDictionary(i=>i.Type);
+        Check(catalogue["PlayEmitter"].Status==PreviewCatalogStatus.Present && catalogue["PlayEfx"].CanAdd && catalogue["PlayEfx"].Uses>0 &&
+            !catalogue["Life"].CanAdd && catalogue["Life"].Status==PreviewCatalogStatus.EntryOnly &&
+            PreviewAttributeCatalog.Re4.For("TypeBillboard3D",[]).Single(i=>i.Type=="PlayEfx").Status==PreviewCatalogStatus.ActionOnly,"Action catalogue");
+        long r1=es.Revision;
+        es=(await ee.SendRawAsync("remove_attribute",new(){["target"]=action.ToJson(play)},r1)).State;
+        Check(es.Revision==r1+1 && action.Equals(es.EditTarget) && es.Attributes!.All(a=>a.Type!="PlayEmitter"),"Removing the PlayEmitter keeps the Action selected");
+        var efxFields=new JsonArray(PreviewAttributeCatalog.Re4.Defaults("PlayEfx").Select(f=>(JsonNode?)new JsonObject{["path"]=f.Key,["value"]=f.Value}).ToArray());
+        es=(await ee.SendRawAsync("add_attribute",new(){["target"]=action.ToJson(),["type"]="PlayEfx",["fields"]=efxFields},es.Revision)).State;
+        Check(es.Revision==r1+2 && es.Attributes!.Any(a=>a.Type=="PlayEfx"),"Adding a PlayEfx to the Action");
+        es=await ee.CommandAsync("undo");es=await ee.CommandAsync("undo");
+        Check(es.Revision==r1+4 && es.Attributes!.Any(a=>a.Type=="PlayEmitter") && action.Equals(es.EditTarget),"Undo brings the PlayEmitter back");
+        es=await ee.SelectTargetAsync(nested);
+        Check(nested.Equals(es.EditTarget),"The embedded entry is reachable again after undo");
+        Console.WriteLine($"PASS Action: {action.Label} select/inspect{(playNumber==null?"":"/set "+playNumber.Path)}, catalogue, PlayEmitter → PlayEfx and undo");
+
+        // Entry operations inside the embedded file: add, duplicate, copy/paste and remove change only that file, the
+        // selection carries the path, a path inside target is refused, the last embedded entry stays, and undo restores.
+        {
+            var path=new JsonArray(new JsonObject{["kind"]=hop.Kind,["index"]=hop.Index,["attributeIndex"]=hop.AttributeIndex});
+            JsonArray Path()=>(JsonArray)path.DeepClone();
+            async Task<(JsonNode Tree,JsonArray Embedded)> Tree()
+            {
+                var t=(await ee.SendRawAsync("status",new())).Reply["document"]!;
+                return (t,(JsonArray)new PreviewEditTarget("entry",0,[hop]).Find(t)!.Parent!);
+            }
+            var (tree0,embedded0)=await Tree();
+            int count0=embedded0.Count;string rootTree=tree0["entries"]!.ToJsonString();
+            long r2=ee.State!.Revision;
+            var reply=(await ee.SendRawAsync("add_entry",new(){["embeddedPath"]=Path(),["name"]="New_embedded",["attributes"]=new JsonArray(new JsonObject{["type"]="Life"})},r2)).Reply;
+            Check(reply["selection"]?["index"]?.GetValue<int>()==count0 && reply["selection"]?["embeddedPath"]?.AsArray().Count==1,"Embedded add_entry reports the new entry with its path");
+            var added=PreviewEditTarget.Parse("entry",count0,reply["selection"]!["embeddedPath"]);
+            es=await ee.SelectTargetAsync(added);
+            Check(added.Equals(es.EditTarget) && es.Attributes!.Any(a=>a.Type=="Life"),"The new embedded entry can be selected");
+            reply=(await ee.SendRawAsync("duplicate_entry",new(){["embeddedPath"]=Path(),["index"]=0},ee.State!.Revision)).Reply;
+            Check(reply["selection"]?["index"]?.GetValue<int>()==count0+1,"Embedded duplicate_entry reports the copy");
+            await ee.SendRawAsync("copy_efx",new(){["target"]=new PreviewEditTarget("entry",1,[hop]).ToJson()});
+            reply=(await ee.SendRawAsync("paste_efx",new(){["target"]=new JsonObject{["kind"]="document",["index"]=0,["embeddedPath"]=Path()},
+                ["clipboardId"]=(await ee.SendRawAsync("status",new())).Reply["copyBuffer"]?["id"]?.GetValue<string>()},ee.State!.Revision)).Reply;
+            Check(reply["selection"]?["index"]?.GetValue<int>()==count0+2 && reply["selection"]?["embeddedPath"]?.AsArray().Count==1,"Pasting an entry into the embedded file reports its path");
+            var (tree1,embedded1)=await Tree();
+            Check(embedded1.Count==count0+3 && tree1["entries"]!.ToJsonString()==rootTree,"Embedded entry operations change only the embedded file");
+            await Reject(()=>ee.SendRawAsync("duplicate_entry",new(){["index"]=0,["target"]=new PreviewEditTarget("entry",0,[hop]).ToJson()},ee.State!.Revision),"embeddedPath inside target for an entry operation");
+            // Embedded positions shift on removal and the session does not follow embedded entries by id, so the window
+            // leaves an embedded target in the same file before removing (as here).
+            es=await ee.SelectEntryAsync(top);
+            long r3=ee.State!.Revision;
+            es=(await ee.SendRawAsync("remove_entry",new(){["embeddedPath"]=Path(),["index"]=count0},r3)).State;
+            Check(es.Revision==r3+1 && es.EditTarget!.IsRoot,"Embedded remove_entry is one revision");
+            var (_,embedded2)=await Tree();
+            Check(embedded2.Count==count0+2 && embedded2.All(e=>e!["name"]?.GetValue<string>()!="New_embedded"),"Embedded remove_entry removes that entry");
+            for(int i=0;i<4;i++) es=await ee.CommandAsync("undo");
+            var (tree3,embedded3)=await Tree();
+            Check(es.Revision==r3+5 && embedded3.Count==count0 && tree3["entries"]!.ToJsonString()==rootTree,"Undo restores the embedded file");
+            // The last entry of an embedded file stays (remove the PlayEmitter instead).
+            long r4=ee.State!.Revision;
+            for(int i=count0-1;i>0;i--) await ee.SendRawAsync("remove_entry",new(){["embeddedPath"]=Path(),["index"]=i},ee.State!.Revision);
+            await Reject(()=>ee.SendRawAsync("remove_entry",new(){["embeddedPath"]=Path(),["index"]=0},ee.State!.Revision),"removing the last embedded entry");
+            while(ee.State!.Revision<r4+2*(count0-1)) await ee.CommandAsync("undo");
+            Console.WriteLine($"PASS embedded entry operations: add/select/duplicate/paste/remove in {nested.Label[..nested.Label.LastIndexOf('›')].Trim()}, root untouched, undo, last entry kept");
+        }
+
+        // Action operations: add (PlayEfx), duplicate and copy/paste append and select the new Action; ids stay unique;
+        // removing an Action re-points later triggers and is refused while triggers still start it.
+        {
+            es=await ee.SelectEntryAsync(top);
+            long a0=ee.State!.Revision;
+            async Task<ReeLib.EfxFile> SavedFile()
+            {
+                var saved=await ee.CommandAsync("save",Path.Combine(root,"actions-"+Guid.NewGuid().ToString("N")+".efx.3539837"));
+                var f=new ReeLib.EfxFile(new ReeLib.FileHandler(new MemoryStream(File.ReadAllBytes(saved.SavedPath!),false),saved.SavedPath!));f.Read();return f;
+            }
+            int Life(ReeLib.EfxFile f)=>f.Entries[top].Attributes.OfType<ReeLib.Efx.Structs.Pt.EFXAttributePtLife>().Single().ActionIndex;
+            var f0=await SavedFile();
+            int actions0=f0.Actions.Count,life0=Life(f0);
+            var playEfxFields=new JsonArray(PreviewAttributeCatalog.Re4.Defaults("PlayEfx").Select(f=>(JsonNode?)new JsonObject{["path"]=f.Key,["value"]=f.Value}).ToArray());
+            var reply=(await ee.SendRawAsync("add_action",new(){["name"]="New_action",["attributes"]=new JsonArray(new JsonObject{["type"]="PlayEfx",["fields"]=playEfxFields})},a0)).Reply;
+            Check(reply["selection"]?["kind"]?.GetValue<string>()=="action" && reply["selection"]?["index"]?.GetValue<int>()==actions0,"add_action reports the new Action");
+            es=await ee.SelectTargetAsync(new("action",actions0,[]));
+            Check(es.Attributes!.Single().Type=="PlayEfx","The new Action holds a PlayEfx");
+            reply=(await ee.SendRawAsync("duplicate_action",new(){["index"]=0},ee.State!.Revision)).Reply;
+            Check(reply["selection"]?["index"]?.GetValue<int>()==actions0+1,"duplicate_action reports the copy");
+            await ee.SendRawAsync("copy_efx",new(){["target"]=new PreviewEditTarget("action",0,[]).ToJson()});
+            var buffer=(await ee.SendRawAsync("status",new())).Reply["copyBuffer"];
+            Check(buffer?["kind"]?.GetValue<string>()=="action","copy_efx copies a whole Action");
+            reply=(await ee.SendRawAsync("paste_efx",new(){["target"]=new JsonObject{["kind"]="document",["index"]=0},["clipboardId"]=buffer!["id"]!.GetValue<string>()},ee.State!.Revision)).Reply;
+            Check(reply["selection"]?["kind"]?.GetValue<string>()=="action" && reply["selection"]?["index"]?.GetValue<int>()==actions0+2,"paste_efx appends the Action");
+            var f1=await SavedFile();
+            var ids=f1.Actions.Select(a=>a.actionUnkn0).ToArray();
+            var uniqueIds=f1.Entries.Cast<ReeLib.Efx.EFXEntryBase>().Concat(f1.Actions).SelectMany(e=>e.Attributes)
+                .SelectMany(a=>a is ReeLib.Efx.Structs.Basic.EFXAttributePlayEmitter {efxrData:{} child}
+                    ? child.Entries.Cast<ReeLib.Efx.EFXEntryBase>().Concat(child.Actions).SelectMany(e=>e.Attributes).Prepend(a) : [a]).Select(a=>a.UniqueID).ToArray();
+            Check(f1.Actions.Count==actions0+3 && ids.Distinct().Count()==ids.Length && ids.All(i=>f1.Entries.All(e=>e.index!=i)) &&
+                uniqueIds.Distinct().Count()==uniqueIds.Length,"New Actions get unique node ids and attribute ids");
+            Check(f1.Actions[actions0+1].Attributes[0] is ReeLib.Efx.Structs.Basic.EFXAttributePlayEmitter {efxrData:{} copied} &&
+                copied.Entries.Count==((ReeLib.Efx.Structs.Basic.EFXAttributePlayEmitter)f1.Actions[0].Attributes[0]).efxrData!.Entries.Count,"The duplicate carries the embedded EFX");
+            // Point the trigger at the pasted copy, remove Action 0: the trigger follows the copy down one index.
+            es=await ee.SelectEntryAsync(top);
+            int ptLifeIndex=es.Attributes!.Single(a=>a.Type=="PtLife").Index;
+            es=await ee.InspectAsync(es.Manifest!.DocumentId,es.Revision,ptLifeIndex);
+            es=await ee.ApplyFieldsAsync(new(es.Inspection!,[new("ActionIndex",(actions0+2).ToString(CultureInfo.InvariantCulture))]));
+            reply=(await ee.SendRawAsync("remove_action",new(){["index"]=0},ee.State!.Revision)).Reply;
+            var f2=await SavedFile();
+            Check(f2.Actions.Count==actions0+2 && Life(f2)==actions0+1 && reply["deletion"]?["clearedTriggers"]?.GetValue<int>()==0,"Removing an earlier Action re-points the trigger");
+            await Reject(()=>ee.SendRawAsync("remove_action",new(){["index"]=actions0+1},ee.State!.Revision),"removing a triggered Action without clearTriggers");
+            reply=(await ee.SendRawAsync("remove_action",new(){["index"]=actions0+1,["clearTriggers"]=true},ee.State!.Revision)).Reply;
+            var f3=await SavedFile();
+            Check(f3.Actions.Count==actions0+1 && Life(f3)==-1 && reply["deletion"]?["clearedTriggers"]?.GetValue<int>()==1,"clearTriggers removes a triggered Action and its triggers start nothing");
+            for(int i=0;i<6;i++) es=await ee.CommandAsync("undo");
+            var f4=await SavedFile();
+            Check(f4.Actions.Count==actions0 && Life(f4)==life0,"Undo restores the Actions and the trigger");
+            foreach(var f in new[]{f0,f1,f2,f3,f4}) f.FileHandler.Dispose();
+            Console.WriteLine($"PASS Action operations: add PlayEfx, duplicate with embedded EFX, copy/paste, unique ids, trigger re-pointing, clearTriggers, undo");
+        }
+    }
 }
 catch(Exception ex) {Console.Error.WriteLine(ex);Environment.ExitCode=1;}

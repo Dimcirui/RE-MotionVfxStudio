@@ -35,6 +35,11 @@ internal sealed class Re4PreviewToolSet : IToolSet
     private static JsonObject Fixture() => Choice("Built-in test emitter: bb (saliva, csa013) or bb2 (sm82_320).", "bb", "bb2");
     private static JsonObject Path() => Text("Absolute path of an RE4 .efx file. Game files are only read.", 1024);
     private static JsonObject Offset() => Text("Byte offset of the entry in the file, hexadecimal (for example \"0x2e29\").", 32);
+    /// <summary>Steps into embedded EFX (select_entry and the entry tools).</summary>
+    private static JsonObject EmbeddedPath() => new JsonObject { ["type"] = "array", ["minItems"] = 0, ["maxItems"] = 16,
+                    ["description"] = "Steps into embedded EFX, outermost first. Each step is the PlayEmitter attribute of an Action (kind action) or entry of the file reached so far. One step reaches the entries embedded in a top-level Action.",
+                    ["items"] = Object(new() { ["kind"] = Choice("Owner of the PlayEmitter.", "action", "entry"), ["index"] = Integer("Action or entry index."),
+                        ["attributeIndex"] = Integer("Index of the PlayEmitter attribute.", 0, 4096) }, "kind", "index", "attributeIndex") };
     private static ToolDefinition Define(string action, string description, JsonObject properties, string[] required, bool readOnly = false, bool idempotent = false)
         => new(action, description, Object(properties, required), readOnly, idempotent);
 
@@ -44,12 +49,16 @@ internal sealed class Re4PreviewToolSet : IToolSet
         Define("launch", "Start the preview window when none is running, then wait for its first document to load. If a window already answers, returns its status instead of starting another. Requires a Release or Debug build of VfxStudio.Re4Preview.",
             new() { ["fixture"] = Fixture(), ["path"] = Path(), ["offset"] = Offset(),
                 ["quality"] = Choice("Particle render resolution; default auto.", "auto", "full", "half", "quarter") }, []),
-        Define("open", "Open an EFX file and select one CPU Billboard3D emitter, replacing the current document. Give fixture, or path with exactly one of entryPosition, entryId or offset. The timeline restarts paused at tick 0.",
+        Define("open", "Open an EFX file and select one of its entries for editing, replacing the current document. Give fixture, or path with exactly one of entryPosition, entryId or offset. The timeline restarts paused at tick 0.",
             new() { ["fixture"] = Fixture(), ["path"] = Path(), ["entryPosition"] = Integer("Zero-based position in the file's entry list."),
                 ["entryId"] = Integer("Native entry index field."), ["offset"] = Offset(),
                 ["discardUnsaved"] = Boolean("Required true when the current document has unsaved edits that should be dropped.") }, []),
-        Define("select_entry", "Make another entry of the open file the edited one (inspect, set_fields and structure tools act on it). The whole file stays loaded, so the preview neither reloads nor moves in time. Billboard3D, Polygon, Billboard2D, RibbonFollow, RibbonLength, RibbonFixEnd, PolygonTrail, Mesh and NoDraw entries can be selected; status.preview.entries lists them, with the reason for each entry that is not shown.",
-            new() { ["entryPosition"] = Integer("Entry position from status.preview.entries."), }, ["entryPosition"]),
+        Define("select_entry", "Make another entry of the open file the edited one (inspect, set_fields, curve_key and the attribute structure tools act on it). The whole file stays loaded, so the preview neither reloads nor moves in time. Any top-level entry can be selected: editing does not depend on drawing. status.preview.entries lists the entries, and shown/excluded tells which the preview draws. " +
+            "With embeddedPath, the entry is one embedded in an Action's PlayEmitter; status.preview.embeddedEntries lists them with the arguments to pass, and status.document.editTarget names the one selected. its attributes are edited the same way, the preview keeps its top-level entry and shows the change when the Action fires. Entry-level tools (duplicate_entry, remove_entry, copy_entry) take top-level entries only. " +
+            "With actionIndex instead of entryPosition, an Action is edited (status.preview.actions lists them): its PlayEmitter or PlayEfx settings; attribute_types then offers what an Action can hold.",
+            new() { ["entryPosition"] = Integer("Entry position from status.preview.entries, or inside the embedded file when embeddedPath is given."),
+                ["actionIndex"] = Integer("Action index from status.preview.actions, instead of entryPosition."),
+                ["embeddedPath"] = EmbeddedPath() }, []),
         Define("inspect", "Without attributeIndex: list the selected emitter's attributes. With attributeIndex: return its fields (path, type, value, editable, reason, choices), color groups and curves (path, channels, keys). Use the exact paths for set_fields and curve_key.",
             new() { ["attributeIndex"] = Integer("Attribute index from the attribute list.", 0, 4096) }, [], true, true),
         Define("set_fields", "Change 1–64 fields of one attribute as one revision and one Undo step. Values are the textual form shown by inspect (numbers, enum names or values, true/false, strings). The backend validates types, ranges (min ≤ max) and serialization; a rejected batch changes nothing. Waits until the new revision is shown.",
@@ -75,18 +84,29 @@ internal sealed class Re4PreviewToolSet : IToolSet
         Define("paste_attribute", "Paste the copied attribute into the selected emitter. If the emitter already has that type, pass replaceAttributeIndex (the existing attribute of the same type) to replace it; otherwise the paste is refused. Files with different expression/variable tables are refused. One Undo step.",
             new() { ["clipboardId"] = Text("copyBuffer.id from copy_attribute or status.", 64),
                 ["replaceAttributeIndex"] = Integer("Existing attribute of the same type to replace.", 0, 4096), ["expectedRevision"] = Revision() }, ["clipboardId", "expectedRevision"]),
-        Define("add_entry", "Append a new entry with a Type the preview draws. It gets the attributes at least 95 % of RE4 entries with that Type have, with field values from a typical RE4 attribute of each type, and becomes the selected entry. It joins no effect group. One revision, one Undo step.",
+        Define("add_entry", "Append a new entry with a Type the preview draws. It gets the attributes at least 95 % of RE4 entries with that Type have, with field values from a typical RE4 attribute of each type, and becomes the selected entry. It joins no effect group. One revision, one Undo step. With embeddedPath, the entry is in the embedded EFX that path leads to (status.preview.embeddedEntries gives the paths); that file's positions are used.",
             new() { ["type"] = Choice("Type attribute of the new entry (ignored when script is given).", "TypeBillboard3D", "TypePolygon", "TypeBillboard2D", "TypeRibbonFollow", "TypeRibbonLength", "TypePolygonTrail"),
                 ["script"] = Text("Instead of type: a PtBehavior script class (e.g. via.effect.script.EffectDecal). The entry is RE4's usual carrier of that script: TypeNoDraw with Transform3D, ParentOptions, Spawn, Life and the PtBehavior with RE4's usual parameters.", 128),
-                ["expectedRevision"] = Revision() }, ["expectedRevision"]),
-        Define("duplicate_entry", "Append a copy of an entry (positions from status.preview.entries) and select it when the preview can draw it. One Undo step.",
-            new() { ["entryPosition"] = Integer("Entry to copy."), ["expectedRevision"] = Revision() }, ["entryPosition", "expectedRevision"]),
-        Define("remove_entry", "Remove an entry. When it is the selected one, the nearest previewable entry becomes selected first; refused when no other entry can be previewed. Later entries move up one position. One Undo step.",
-            new() { ["entryPosition"] = Integer("Entry to remove."), ["expectedRevision"] = Revision() }, ["entryPosition", "expectedRevision"]),
-        Define("copy_entry", "Copy an entry into the copy buffer (it survives open, so entries can move between files). Does not change the document.",
-            new() { ["entryPosition"] = Integer("Entry to copy.") }, ["entryPosition"]),
-        Define("paste_entry", "Append the copied entry to the open file (named <name>_copy) and select it when the preview can draw it. Files with different expression/variable tables are refused. One Undo step.",
-            new() { ["clipboardId"] = Text("copyBuffer.id from copy_entry or status.", 64), ["expectedRevision"] = Revision() }, ["clipboardId", "expectedRevision"]),
+                ["embeddedPath"] = EmbeddedPath(), ["expectedRevision"] = Revision() }, ["expectedRevision"]),
+        Define("duplicate_entry", "Append a copy of an entry (positions from status.preview.entries) and select it when the preview can draw it. One Undo step. With embeddedPath, the entry is in the embedded EFX that path leads to (status.preview.embeddedEntries gives the paths); that file's positions are used.",
+            new() { ["entryPosition"] = Integer("Entry to copy."), ["embeddedPath"] = EmbeddedPath(), ["expectedRevision"] = Revision() }, ["entryPosition", "expectedRevision"]),
+        Define("remove_entry", "Remove an entry. When it is the selected one, the nearest other entry becomes selected first; refused when it is the only entry. Later entries move up one position. One Undo step. With embeddedPath, the entry is in the embedded EFX that path leads to (status.preview.embeddedEntries gives the paths); that file's positions are used. The only entry of an embedded EFX cannot be removed (remove the PlayEmitter instead).",
+            new() { ["entryPosition"] = Integer("Entry to remove."), ["embeddedPath"] = EmbeddedPath(), ["expectedRevision"] = Revision() }, ["entryPosition", "expectedRevision"]),
+        Define("copy_entry", "Copy an entry into the copy buffer (it survives open, so entries can move between files). Does not change the document. With embeddedPath, the entry is in the embedded EFX that path leads to (status.preview.embeddedEntries gives the paths); that file's positions are used.",
+            new() { ["entryPosition"] = Integer("Entry to copy."), ["embeddedPath"] = EmbeddedPath(), }, ["entryPosition"]),
+        Define("paste_entry", "Append the copied entry to the open file (named <name>_copy) and select it when the preview can draw it. Files with different expression/variable tables are refused. One Undo step. With embeddedPath, it is appended to that embedded EFX instead.",
+            new() { ["clipboardId"] = Text("copyBuffer.id from copy_entry or status.", 64), ["embeddedPath"] = EmbeddedPath(), ["expectedRevision"] = Revision() }, ["clipboardId", "expectedRevision"]),
+        Define("add_action", "Append a new Action holding a PlayEfx (field values from a typical RE4 PlayEfx; set its efxPath with set_fields) and select it. Nothing starts it yet: point an entry's PtLife.ActionIndex or PtColliderAction.linkedAction at its index. For an Action with embedded particles, copy_action an existing one and paste_action it. One Undo step.",
+            new() { ["embeddedPath"] = EmbeddedPath(), ["expectedRevision"] = Revision() }, ["expectedRevision"]),
+        Define("duplicate_action", "Append a copy of an Action (status.preview.actions; with embeddedPath, of that embedded file) including any embedded EFX, and select it. Nothing starts the copy yet. One Undo step.",
+            new() { ["actionIndex"] = Integer("Action to copy."), ["embeddedPath"] = EmbeddedPath(), ["expectedRevision"] = Revision() }, ["actionIndex", "expectedRevision"]),
+        Define("remove_action", "Remove an Action. Later Actions move up one index and the PtLife / PtColliderAction triggers pointing at them follow. Refused while triggers start this Action unless clearTriggers is true (they then start nothing). One Undo step.",
+            new() { ["actionIndex"] = Integer("Action to remove."), ["embeddedPath"] = EmbeddedPath(), ["clearTriggers"] = Boolean("Set the triggers that start this Action to start nothing."),
+                ["expectedRevision"] = Revision() }, ["actionIndex", "expectedRevision"]),
+        Define("copy_action", "Copy a whole Action (with any embedded EFX) into the copy buffer; it survives open. Does not change the document.",
+            new() { ["actionIndex"] = Integer("Action to copy."), ["embeddedPath"] = EmbeddedPath() }, ["actionIndex"]),
+        Define("paste_action", "Append the copied Action to the open file (or with embeddedPath, to that embedded file) and select it. Nothing starts it yet. Files with different expression/variable tables are refused. One Undo step.",
+            new() { ["clipboardId"] = Text("copyBuffer.id from copy_action or status.", 64), ["embeddedPath"] = EmbeddedPath(), ["expectedRevision"] = Revision() }, ["clipboardId", "expectedRevision"]),
         Define("curve_key", "Add, update or remove one key on an existing curve channel (curves are listed by inspect with attributeIndex). Channel count and mappings never change; a channel keeps at least one key. Bezier keys need all four tangents. One Undo step.",
             new() { ["attributeIndex"] = Integer("Attribute index from inspect.", 0, 4096), ["path"] = Text("Curve path from inspect curves.", 512),
                 ["channel"] = Integer("Channel index within the curve.", 0, 4096), ["operation"] = Choice("Key operation.", "add", "update", "remove"),
@@ -162,6 +182,9 @@ internal sealed class Re4PreviewToolSet : IToolSet
                 if ((operation == "add") == Has("keyIndex")) throw new ArgumentException("keyIndex is required for update and remove, and not accepted for add.");
                 if (operation != "remove" && !(Has("time") && Has("value"))) throw new ArgumentException("add and update need time and value.");
                 if (operation == "remove" && new[] { "time", "value", "interpolation", "outX", "outY", "inX", "inY" }.Any(Has)) throw new ArgumentException("remove takes only keyIndex.");
+                break;
+            case "select_entry":
+                if (Has("entryPosition") == Has("actionIndex")) throw new ArgumentException("Give exactly one of entryPosition or actionIndex.");
                 break;
             case "set_fields":
                 var paths = arguments["fields"]!.AsArray().Select(f => f!["path"]!.GetValue<string>()).ToArray();

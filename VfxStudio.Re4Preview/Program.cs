@@ -66,7 +66,9 @@ var idleBenchmark = options.TryGetValue("idle-benchmark",out string? idleSeconds
     ? new PreviewIdleBenchmark(latency!,editor.Directory,int.Parse(idleSeconds,System.Globalization.CultureInfo.InvariantCulture)) : null;
 if(idleBenchmark!=null && (latencyBenchmark!=null || options.ContainsKey("benchmark") || options.ContainsKey("smoke")))
     throw new ArgumentException("空闲测量不能与其他自动测量模式同时启用。");
-var editPanel = new PreviewEditPanel();
+// Material references for the property panel come through the same lookup as textures (document root, loose files, paks).
+PreviewMaterialReference LoadMaterial(string path)=>PreviewMaterialReference.FromResource(resources,path);
+var editPanel = new PreviewEditPanel(LoadMaterial);
 PreviewGraphPanel? graphPanel = null;
 var curvePanel = new PreviewCurvePanel();
 var catalogPanel = new PreviewCatalogPanel();
@@ -77,7 +79,7 @@ string? lastAttributeList = null;
 JsonObject? lastStructureReply = null;   // backend reply of the last structural edit (selection, document)
 string? openConfirmation = null;         // opened at the top level: popup ids depend on the window that opens them
 string? structureNote = null;        // a remark on the last structural edit (for example: new entry not previewable)
-PreviewStructureRequest? confirmRemoveEntry = null, confirmPaste = null, chooseScript = null;
+PreviewStructureRequest? confirmRemoveEntry = null, confirmPaste = null, chooseScript = null, confirmRemoveAction = null;
 bool dockCatalog = false;            // a saved layout from before the catalogue existed: dock it once next to the main panel
 bool dockMcp = false;                // the same for the MCP status panel
 // A file dropped on the window: waiting (pendingOpen), or waiting for the user to discard unsaved edits (dropConfirm).
@@ -244,8 +246,10 @@ void StartOpenFile(string file)
     editTask=Task.Run(async()=>
     {
         var graph=PreviewEffectGraph.Read(file);
-        int position=graph.Nodes.FirstOrDefault(n=>n.Kind==PreviewGraphNodeKind.Emitter && n.Previewable)?.EntryPosition
-            ?? throw new InvalidDataException("文件里没有预览支持的 entry（Billboard3D、Polygon、Billboard2D、RibbonFollow、RibbonLength）："+Path.GetFileName(file));
+        // Open the first entry the preview draws; a file with none (meshes only, say) still opens for editing.
+        var emitters=graph.Nodes.Where(n=>n.Kind==PreviewGraphNodeKind.Emitter && n.Editable).ToArray();
+        int position=(emitters.FirstOrDefault(n=>n.Drawn)??emitters.FirstOrDefault())?.EntryPosition
+            ?? throw new InvalidDataException("文件里没有 entry："+Path.GetFileName(file));
         return await editor.OpenAtAsync(file,position);
     });
 }
@@ -293,14 +297,17 @@ async Task<PreviewEditorState> Structure(PreviewEditCommand command)
 {
     var request=(PreviewStructureRequest)command.Tag!;
     int entry=request.EntryPosition;
-    JsonObject Target(int? attribute=null)
-    {
-        var t=new JsonObject{["kind"]="entry",["index"]=entry};
-        if(attribute is int a) t["attributeIndex"]=a;
-        return t;
-    }
+    var owner=request.Owner;
+    if(owner.Kind=="action" && request.Op is not ("add_attribute" or "remove_attribute" or "copy_attribute" or "paste_attribute" or "material_parameter"
+        or "add_action" or "duplicate_action" or "remove_action" or "copy_action" or "paste_action"))
+        throw new InvalidOperationException("这个操作不能用在 Action 上。");
+    // Attribute operations address the owner; entry operations an entry of the file the owner's path leads to (the open
+    // file when it is a top-level entry). File operations (add_entry, paste_entry) carry that path with index -1.
+    JsonObject Target(int? attribute=null)=>owner.ToJson(attribute);
+    JsonNode? EmbeddedPath()=>owner.Path.Count==0?null:owner.ToJson()["embeddedPath"]!.DeepClone();
+    JsonObject EntryBody(JsonObject body){if(EmbeddedPath() is {} path) body["embeddedPath"]=path;return body;}
     long Revision()=>request.ExpectedRevision??editor.State?.Revision??command.Revision;
-    async Task Select(int position) { if(editor.State?.Manifest?.EntryPosition!=position) await editor.SelectEntryAsync(position); }
+    async Task Select() { if(!owner.Equals(editor.State?.EditTarget)) await editor.SelectTargetAsync(owner); }
     async Task<PreviewEditorState> Send(string action,JsonObject body,bool mutation=true)
     {
         var (state,reply)=await editor.SendRawAsync(action,body,mutation?Revision():null);
@@ -308,36 +315,54 @@ async Task<PreviewEditorState> Structure(PreviewEditCommand command)
         lastStructureReply=reply;
         return state;
     }
-    // A new entry becomes the edited one when the preview can draw it.
+    // A new entry becomes the edited one; inside an embedded file the backend's selection carries the path.
     async Task<PreviewEditorState> SelectNew(PreviewEditorState state)
     {
         int count=lastStructureReply?["document"]?["entries"]?.AsArray().Count??0;
-        int position=lastStructureReply?["selection"]?["index"]?.GetValue<int>()??count-1;
-        try {return await editor.SelectEntryAsync(position);}
-        catch(InvalidOperationException) {structureNote=$"新 entry [{position}] 已加入，但预览不支持它的类型，暂不能选中编辑。";return state;}
+        var selection=lastStructureReply?["selection"];
+        int position=selection?["index"]?.GetValue<int>()??count-1;
+        try
+        {
+            var path=selection?["embeddedPath"] as JsonArray;
+            if(selection?["kind"]?.GetValue<string>()=="action") return await editor.SelectTargetAsync(PreviewEditTarget.Parse("action",position,path));
+            if(path is {Count:>0}) return await editor.SelectTargetAsync(PreviewEditTarget.Parse("entry",position,path));
+            if(owner.Path.Count>0) throw new InvalidOperationException("后端没有给出新 entry 的位置。");
+            return await editor.SelectEntryAsync(position);
+        }
+        catch(Exception ex) when(ex is InvalidOperationException or ArgumentException) {structureNote=$"新 entry [{position}] 已加入，但没能选中：{ex.Message}";return state;}
     }
     string label=request.Op switch
     {
         "add_attribute"=>"添加 "+request.Type,"remove_attribute"=>"删除属性","copy_attribute"=>"复制属性","paste_attribute"=>"粘贴属性",
         "copy_entry"=>"复制 entry","paste_entry"=>"粘贴 entry","add_entry"=>"新建 entry","duplicate_entry"=>"创建副本","remove_entry"=>"删除 entry",
         "emitter_priority"=>request.AttributeIndex>=0?"关闭 EmitterPriority":"开启 EmitterPriority",
-        "behavior_parameter"=>(request.Type=="remove"?"删除脚本参数 ":"添加脚本参数 ")+request.Parameter,_=>request.Op
+        "behavior_parameter"=>(request.Type=="remove"?"删除脚本参数 ":"添加脚本参数 ")+request.Parameter,
+        "material_parameter"=>request.Label??"修改材质参数",
+        "add_action"=>"新建 Action","duplicate_action"=>"创建 Action 副本","remove_action"=>"删除 Action","copy_action"=>"复制 Action","paste_action"=>"粘贴 Action",
+        _=>request.Op
     };
     try
     {
         switch(request.Op)
         {
             case "add_attribute":
-                await Select(entry);
+                await Select();
                 return await Send("add_attribute",AddAttributeBody(Target(),request.Type!,request.Script));
             case "remove_attribute":
-                await Select(entry);
+                await Select();
                 return await Send("remove_attribute",new(){["target"]=Target(request.AttributeIndex)});
             case "behavior_parameter":
             {
-                await Select(entry);
+                await Select();
                 var body=await BehaviorParameterBody(Target(request.AttributeIndex),request.Type!,request.Parameter!,request.Value);
                 return await Send("behavior_parameter",body);
+            }
+            case "material_parameter":
+            {
+                await Select();
+                var body=(JsonObject)request.Body!.DeepClone();
+                body["target"]=Target(request.AttributeIndex);
+                return await Send("material_parameter",body);
             }
             case "copy_attribute":
                 return await Send("copy_efx",new(){["target"]=Target(request.AttributeIndex)},mutation:false);
@@ -350,7 +375,7 @@ async Task<PreviewEditorState> Structure(PreviewEditCommand command)
                 return await Send("copy_efx",new(){["target"]=Target()},mutation:false);
             case "paste_attribute":
             {
-                await Select(entry);
+                await Select();
                 var body=new JsonObject{["target"]=Target(),["clipboardId"]=copyBuffer?["id"]?.GetValue<string>()};
                 if(request.AttributeIndex>=0) {body["replace"]=true;body["replaceAttributeIndex"]=request.AttributeIndex;}
                 var state=await Send("paste_efx",body);
@@ -358,7 +383,11 @@ async Task<PreviewEditorState> Structure(PreviewEditCommand command)
                 return state;
             }
             case "paste_entry":
-                return await SelectNew(await Send("paste_efx",new(){["target"]=new JsonObject{["kind"]="document",["index"]=0},["clipboardId"]=copyBuffer?["id"]?.GetValue<string>()}));
+            {
+                var into=new JsonObject{["kind"]="document",["index"]=0};
+                if(EmbeddedPath() is {} path) into["embeddedPath"]=path;
+                return await SelectNew(await Send("paste_efx",new(){["target"]=into,["clipboardId"]=copyBuffer?["id"]?.GetValue<string>()}));
+            }
             case "add_entry":
             {
                 // A script carrier takes RE4's usual attribute list for that script; other entries the Type's template.
@@ -366,12 +395,41 @@ async Task<PreviewEditorState> Structure(PreviewEditCommand command)
                     ?? throw new InvalidOperationException("RE4 里没有这个脚本类的模板："+request.Script);
                 var types=script?.Carrier ?? PreviewAttributeCatalog.Re4.Template(request.Type!);
                 var attributes=new JsonArray(types.Select(t=>(JsonNode?)AddAttributeBody(null,t,script?.Name)).ToArray());
-                return await SelectNew(await Send("add_entry",new(){["name"]="New_"+(script?.ShortName ?? request.Type![4..]),["attributes"]=attributes}));
+                return await SelectNew(await Send("add_entry",EntryBody(new(){["name"]="New_"+(script?.ShortName ?? request.Type![4..]),["attributes"]=attributes})));
             }
             case "duplicate_entry":
-                return await SelectNew(await Send("duplicate_entry",new(){["index"]=entry}));
+                return await SelectNew(await Send("duplicate_entry",EntryBody(new(){["index"]=owner.Index})));
+            case "add_action":
+                return await SelectNew(await Send("add_action",EntryBody(new(){["name"]="New_action",
+                    ["attributes"]=new JsonArray(AddAttributeBody(null,request.Type??"PlayEfx",null))})));
+            case "duplicate_action":
+                return await SelectNew(await Send("duplicate_action",EntryBody(new(){["index"]=owner.Index})));
+            case "copy_action":
+                return await Send("copy_efx",new(){["target"]=Target()},mutation:false);
+            case "paste_action":
+            {
+                var into=new JsonObject{["kind"]="document",["index"]=0};
+                if(EmbeddedPath() is {} path) into["embeddedPath"]=path;
+                return await SelectNew(await Send("paste_efx",new(){["target"]=into,["clipboardId"]=copyBuffer?["id"]?.GetValue<string>()}));
+            }
+            case "remove_action":
+            {
+                // Action positions shift: an Action or embedded target in this file goes back to the preview's entry first.
+                if(editor.State?.Target is {} edited && (edited.Kind=="action" || edited.Path.Count>0))
+                    await editor.SelectEntryAsync(editor.State.Manifest!.EntryPosition);
+                // The confirmation listed the triggers; they stop firing.
+                return await Send("remove_action",EntryBody(new(){["index"]=owner.Index,["clearTriggers"]=request.Body?["clearTriggers"]?.GetValue<bool>()??true}));
+            }
             case "remove_entry":
             {
+                if(!owner.IsRoot)
+                {
+                    // An embedded entry: its positions shift, so an edited target inside the same file goes back to the
+                    // preview's top-level entry first.
+                    if(editor.State?.Target is {} edited && edited.Path.Count>0 && new PreviewEditTarget("entry",0,edited.Path).Key==new PreviewEditTarget("entry",0,owner.Path).Key)
+                        await editor.SelectEntryAsync(editor.State.Manifest!.EntryPosition);
+                    return await Send("remove_entry",EntryBody(new(){["index"]=owner.Index}));
+                }
                 // The edited entry cannot be the one removed: move to the fallback (chosen on the main thread) first.
                 if(editor.State?.Manifest?.EntryPosition==entry)
                     await editor.SelectEntryAsync(request.AttributeIndex);
@@ -391,13 +449,15 @@ void RequestStructure(PreviewStructureRequest request)
     {
         case "remove_entry" when confirmRemoveEntry==null:
             confirmRemoveEntry=request;openConfirmation="删除 entry";return;
+        case "remove_action" when confirmRemoveAction==null:
+            confirmRemoveAction=request;openConfirmation="删除 Action";return;
         case "paste_attribute" when request.AttributeIndex<0:
         {
             // The same type already there: ask before replacing it (the backend refuses otherwise).
             string? type=copyBuffer?["attributeType"]?.GetValue<string>();
-            var existing=request.EntryPosition==manifest.EntryPosition
+            var existing=request.Owner.Equals(editorState.EditTarget)
                 ? editorState.Attributes?.FirstOrDefault(a=>a.Type==type)?.Index
-                : scene?.Graph.EmitterAt(request.EntryPosition)?.AttributeTypes?.ToList().IndexOf(type??"") is int i and >=0 ? i : null;
+                : scene?.Graph.Nodes.FirstOrDefault(n=>request.Owner.Equals(n.Target))?.AttributeTypes?.ToList().IndexOf(type??"") is int i and >=0 ? i : null;
             if(existing is int index) {confirmPaste=request with {AttributeIndex=index};openConfirmation="替换属性";return;}
             break;
         }
@@ -408,15 +468,15 @@ void RequestStructure(PreviewStructureRequest request)
     }
     StartEditorCommand(new PreviewEditCommand("structure",editorState.Revision,EntryPosition:request.EntryPosition,Tag:request));
 }
-// The entry to edit after removing one: the current entry, or when that is the one removed, the nearest previewable entry (-1: none).
+// The entry to edit after removing one: the current entry, or when that is the one removed, the nearest other entry (-1: none).
 int RemoveFallback(int removed)
 {
     int current=editorState?.Manifest?.EntryPosition??-1;
     if(removed!=current) return current;
-    return scene?.Graph.Nodes.Where(n=>n.Kind==PreviewGraphNodeKind.Emitter && n.Previewable && n.EntryPosition!=removed)
+    return scene?.Graph.Nodes.Where(n=>n.Kind==PreviewGraphNodeKind.Emitter && n.Editable && n.EntryPosition!=removed)
         .OrderBy(n=>Math.Abs(n.EntryPosition!.Value-removed)).Select(n=>n.EntryPosition!.Value).DefaultIfEmpty(-1).First()??-1;
 }
-void RequestAdd(PreviewAddRequest request) => RequestStructure(new PreviewStructureRequest("add_attribute",request.EntryPosition,Type:request.Type));
+void RequestAdd(PreviewAddRequest request) => RequestStructure(new PreviewStructureRequest("add_attribute",request.EntryPosition,Type:request.Type,Target:request.Target));
 // Confirmation popups for structural edits; drawn every frame at the top level.
 void DrawStructureConfirmations()
 {
@@ -424,12 +484,14 @@ void DrawStructureConfirmations()
     if(ImGui.BeginPopupModal("删除 entry",ImGuiWindowFlags.AlwaysAutoResize))
     {
         var request=confirmRemoveEntry;
-        var node=request==null?null:scene?.Graph.EmitterAt(request.EntryPosition);
-        ImGui.Text($"删除 {node?.Title ?? "entry"}？可以撤销。");
-        // Removing the edited entry needs another previewable entry to move to.
+        bool embeddedRemoval=request?.Target is {IsRoot:false};
+        var node=request==null?null:embeddedRemoval?scene?.Graph.Nodes.FirstOrDefault(n=>request.Owner.Equals(n.Target)):scene?.Graph.EmitterAt(request.EntryPosition);
+        ImGui.Text($"删除 {(embeddedRemoval?request!.Owner.Label+" ":"")}{node?.Title ?? "entry"}？可以撤销。");
+        // Removing the edited entry needs another entry to move to.
         int current=editorState?.Manifest?.EntryPosition??-1;
-        int fallback=request==null?-1:RemoveFallback(request.EntryPosition);
-        if(fallback<0) ImGui.TextColored(new Vector4(1,.6f,.35f,1),"这是文件里唯一能预览的 entry，删除后没有可编辑的目标，不能删除。");
+        int fallback=request==null?-1:embeddedRemoval?current:RemoveFallback(request.EntryPosition);
+        if(fallback<0) ImGui.TextColored(new Vector4(1,.6f,.35f,1),"这是文件里唯一的 entry，删除后没有可编辑的目标，不能删除。");
+        else if(embeddedRemoval) ImGui.TextDisabled("内嵌 entry 的位置会变；正在编辑同一内嵌文件时，改为编辑预览所在的顶层 entry。");
         else if(request!=null && request.EntryPosition==current) ImGui.TextDisabled($"删除后改为编辑 [{fallback}]。");
         ImGui.BeginDisabled(fallback<0 || request==null);
         if(ImGui.Button("删除"))
@@ -441,6 +503,26 @@ void DrawStructureConfirmations()
         }
         ImGui.EndDisabled();ImGui.SameLine();
         if(ImGui.Button("取消")) {confirmRemoveEntry=null;ImGui.CloseCurrentPopup();}
+        ImGui.EndPopup();
+    }
+    if(ImGui.BeginPopupModal("删除 Action",ImGuiWindowFlags.AlwaysAutoResize))
+    {
+        var request=confirmRemoveAction;
+        ImGui.Text($"删除 {request?.Owner.Label ?? "Action"}？可以撤销。");
+        // Triggers that start it (graph links into the Action node; top-level Actions only).
+        var node=request==null||!request.Owner.IsRootAction()?null:scene?.Graph.Nodes.FirstOrDefault(n=>request.Owner.Equals(n.Target));
+        var triggers=node==null?[]:scene!.Graph.Links.Where(l=>l.ToNode==node.Id).Select(l=>scene.Graph.Find(l.FromNode)?.Title+(l.Label.Length>0?" · "+l.Label:"")).ToArray();
+        if(triggers.Length>0) ImGui.TextColored(new Vector4(1,.75f,.35f,1),"这些触发会改为不触发：\n  "+string.Join("\n  ",triggers));
+        ImGui.TextDisabled("后面的 Action 序号减一，指向它们的触发跟着改。");
+        if(ImGui.Button("删除"))
+        {
+            ImGui.CloseCurrentPopup();
+            if(request!=null && editorState!=null && editTask==null)
+                StartEditorCommand(new PreviewEditCommand("structure",editorState.Revision,Tag:request));
+            confirmRemoveAction=null;
+        }
+        ImGui.SameLine();
+        if(ImGui.Button("取消")) {confirmRemoveAction=null;ImGui.CloseCurrentPopup();}
         ImGui.EndPopup();
     }
     if(ImGui.BeginPopupModal("选择脚本类",ImGuiWindowFlags.AlwaysAutoResize))
@@ -485,6 +567,7 @@ void StartEditorCommand(PreviewEditCommand command, bool warmup=false)
         "inspect" => editor.InspectAsync(command.DocumentId!,command.Revision,command.AttributeIndex),
         "open_saved" => editor.OpenSavedAsync(),
         "select_entry" => editor.SelectEntryAsync(command.EntryPosition),
+        "select_target" => editor.SelectTargetAsync((PreviewEditTarget)command.Tag!),
         "curve_key" => SendCurveKey(command),
         "structure" => Structure(command),
         "open_source" => OpenOriginal(),
@@ -525,6 +608,8 @@ JsonObject PreviewReport() => new()
     ["shownEntries"]=scene?.Shown.Count,
     ["entries"]=scene==null?null:PreviewControlReports.SceneEntries(scene,displayedManifest?.EntryPosition),
     ["childActionEntries"]=scene==null?null:PreviewControlReports.SceneChildren(scene),
+    ["actions"]=scene==null?null:PreviewControlReports.Actions(scene.Graph),
+    ["embeddedEntries"]=scene==null?null:PreviewControlReports.EmbeddedEntries(scene.Graph),
     ["soloSelected"]=soloSelected,
     ["view"]=ViewReport()
 };
@@ -579,14 +664,36 @@ bool Settled(out string? error)
     return true;
 }
 bool IsMutation(string action) => action is "set_fields" or "undo" or "redo" or "open" or "select_entry" or "add_attribute" or "remove_attribute" or "curve_key" or "paste_attribute" or "behavior_parameter"
-    or "add_entry" or "duplicate_entry" or "remove_entry" or "paste_entry";
+    or "add_entry" or "duplicate_entry" or "remove_entry" or "paste_entry" or "add_action" or "duplicate_action" or "remove_action" or "paste_action";
 // Entry-level AI actions run the same code as the window's menus.
 PreviewStructureRequest EntryRequest(PreviewControlRequest job)
 {
     var a=job.Arguments;
     long? revision=a["expectedRevision"]==null?null:PreviewControlReports.Long(a,"expectedRevision");
     int Position()=>PreviewControlReports.Int(a,"entryPosition",0,1<<20);
-    return job.Action switch
+    if(job.Action.EndsWith("_action",StringComparison.Ordinal))
+    {
+        // Action tools: actionIndex in the open file, or in the embedded file embeddedPath leads to.
+        bool file=job.Action is "add_action" or "paste_action";
+        var owner=PreviewEditTarget.Parse("action",file?0:PreviewControlReports.Int(a,"actionIndex",0,1<<20),a["embeddedPath"]);
+        if(file) owner=owner with {Index=-1};
+        return job.Action switch
+        {
+            "add_action"=>new("add_action",-1,Type:"PlayEfx",ExpectedRevision:revision,Target:owner),
+            "duplicate_action"=>new("duplicate_action",owner.Index,ExpectedRevision:revision,Target:owner),
+            "copy_action"=>new("copy_action",owner.Index,Target:owner),
+            "paste_action"=>new("paste_action",-1,ExpectedRevision:revision,Target:owner),
+            "remove_action"=>new("remove_action",owner.Index,ExpectedRevision:revision,Target:owner,
+                Body:new JsonObject{["clearTriggers"]=PreviewControlReports.Bool(a,"clearTriggers")}),
+            _=>throw new InvalidOperationException("内部错误：未知的 Action 操作。")
+        };
+    }
+    // With embeddedPath the entry (or the new entry's file) is inside the embedded EFX the path leads to.
+    PreviewEditTarget? Inside=a["embeddedPath"]==null?null:PreviewEditTarget.Parse("entry",job.Action is "add_entry" or "paste_entry"?0:Position(),a["embeddedPath"]);
+    if(Inside!=null && job.Action is "add_entry" or "paste_entry") Inside=Inside with {Index=-1};
+    var request=EntryRequestCore();
+    return Inside==null?request:request with {Target=Inside};
+    PreviewStructureRequest EntryRequestCore() => job.Action switch
     {
         "add_entry"=>PreviewControlReports.String(a,"script") is {} script
             ? new("add_entry",-1,Type:"TypeNoDraw",ExpectedRevision:revision,Script:script)
@@ -594,7 +701,7 @@ PreviewStructureRequest EntryRequest(PreviewControlRequest job)
         "duplicate_entry"=>new("duplicate_entry",Position(),ExpectedRevision:revision),
         "copy_entry"=>new("copy_entry",Position()),
         "paste_entry"=>new("paste_entry",-1,ExpectedRevision:revision),
-        "remove_entry"=>new("remove_entry",Position(),RemoveFallback(Position()),ExpectedRevision:revision),
+        "remove_entry"=>new("remove_entry",Position(),Inside==null?RemoveFallback(Position()):-1,ExpectedRevision:revision),
         _=>throw new InvalidOperationException("内部错误：未知的 entry 操作。")
     };
 }
@@ -612,15 +719,17 @@ void RequireNoDraft()
 {
     if(editPanel.HasUnappliedChanges) throw new InvalidOperationException("窗口里有未应用的属性草稿。请先在窗口中应用或放弃草稿，AI 不会覆盖它。");
 }
-JsonObject AttributeTarget(int attribute)
+// The entry the property panel edits: top-level, or embedded (select_entry with embeddedPath).
+JsonObject AttributeTarget(int attribute)=>(editorState?.EditTarget??throw new InvalidOperationException("尚未打开文档。")).ToJson(attribute);
+JsonObject EntryTarget()=>(editorState?.EditTarget??throw new InvalidOperationException("尚未打开文档。")).ToJson();
+// select_entry: entryPosition alone is a top-level entry, actionIndex an Action; with embeddedPath either is taken in
+// the embedded file the path leads to.
+PreviewEditTarget SelectArgument(JsonObject a)
 {
-    int entry=editorState?.Manifest?.EntryPosition??throw new InvalidOperationException("尚未打开文档。");
-    return new(){["kind"]="entry",["index"]=entry,["attributeIndex"]=attribute};
-}
-JsonObject EntryTarget()
-{
-    int entry=editorState?.Manifest?.EntryPosition??throw new InvalidOperationException("尚未打开文档。");
-    return new(){["kind"]="entry",["index"]=entry};
+    if((a["entryPosition"]==null)==(a["actionIndex"]==null)) throw new ArgumentException("select_entry 需要 entryPosition 或 actionIndex 其中之一。");
+    return a["actionIndex"]!=null
+        ? PreviewEditTarget.Parse("action",PreviewControlReports.Int(a,"actionIndex",0,1<<20),a["embeddedPath"])
+        : PreviewEditTarget.Parse("entry",PreviewControlReports.Int(a,"entryPosition",0,1<<20),a["embeddedPath"]);
 }
 JsonObject PasteBody(JsonObject a)
 {
@@ -757,7 +866,7 @@ void BeginControl(PreviewControlRequest job)
             job.Succeed(CompositionReport()); return;
         }
         case "select_entry":
-            PreviewControlReports.Int(a,"entryPosition",0,1<<20);RequireNoDraft();AttributeTarget(0);
+            SelectArgument(a);RequireNoDraft();AttributeTarget(0);
             job.Phase=1; return;
         case "add_attribute":
             if(PreviewControlReports.String(a,"type") is not {Length:>0}) throw new ArgumentException("缺少属性类型 type。");
@@ -795,11 +904,22 @@ void BeginControl(PreviewControlRequest job)
             RequireNoDraft();AttributeTarget(0);
             job.Phase=1; return;
         }
+        case "add_action": case "duplicate_action": case "remove_action": case "copy_action": case "paste_action":
+        {
+            if(editorState?.Manifest==null) throw new InvalidOperationException("尚未打开文档。");
+            if(job.Action!="copy_action") {PreviewControlReports.Long(a,"expectedRevision");RequireNoDraft();}
+            if(a["embeddedPath"]!=null) PreviewEditTarget.Parse("action",0,a["embeddedPath"]);
+            if(job.Action is "duplicate_action" or "remove_action" or "copy_action") PreviewControlReports.Int(a,"actionIndex",0,1<<20);
+            if(job.Action=="paste_action" && (copyBuffer?["kind"]?.GetValue<string>()!="action" || copyBuffer["id"]?.GetValue<string>()!=PreviewControlReports.String(a,"clipboardId")))
+                throw new InvalidOperationException("复制缓冲区里不是这个 Action；先 copy_action，再用结果里的 copyBuffer.id。");
+            job.Phase=1; return;
+        }
         case "add_entry": case "duplicate_entry": case "remove_entry": case "copy_entry": case "paste_entry":
         {
             if(editorState?.Manifest==null) throw new InvalidOperationException("尚未打开文档。");
             if(job.Action!="copy_entry") {PreviewControlReports.Long(a,"expectedRevision");RequireNoDraft();}
-            if(job.Action is "duplicate_entry" or "remove_entry" or "copy_entry")
+            if(a["embeddedPath"]!=null) PreviewEditTarget.Parse("entry",0,a["embeddedPath"]);   // shape only; the backend resolves it
+            if(job.Action is "duplicate_entry" or "remove_entry" or "copy_entry" && a["embeddedPath"]==null)
             {
                 int position=PreviewControlReports.Int(a,"entryPosition",0,1<<20);
                 if(scene?.Graph.EmitterAt(position)==null) throw new ArgumentException($"没有位置为 {position} 的 entry。");
@@ -903,7 +1023,8 @@ void ContinueControl(PreviewControlRequest job)
                     PreviewControlReports.Long(a,"expectedRevision")),
                 "undo" or "redo"=>StartBackend(job,job.Action,new(),PreviewControlReports.Long(a,"expectedRevision")),
                 "attribute_types"=>StartBackend(job,"status",new(),null),
-                "select_entry"=>StartBackend(job,"configure_offline_preview",new(){["entryPosition"]=PreviewControlReports.Int(a,"entryPosition",0,1<<20)},null),
+                "select_entry"=>SelectArgument(a) is {IsRoot:false} embedded ? Task.Run(()=>editor.SelectTargetAsync(embedded))
+                    : StartBackend(job,"configure_offline_preview",new(){["entryPosition"]=PreviewControlReports.Int(a,"entryPosition",0,1<<20)},null),
                 "add_attribute"=>StartBackend(job,"add_attribute",AddAttributeBody(EntryTarget(),PreviewControlReports.String(a,"type")!,PreviewControlReports.String(a,"script")),
                     PreviewControlReports.Long(a,"expectedRevision")),
                 "remove_attribute"=>StartBackend(job,"remove_attribute",new(){["target"]=AttributeTarget(PreviewControlReports.Int(a,"attributeIndex",0,4096))},PreviewControlReports.Long(a,"expectedRevision")),
@@ -917,7 +1038,8 @@ void ContinueControl(PreviewControlRequest job)
                 "copy_attribute"=>StartBackend(job,"copy_efx",new(){["target"]=AttributeTarget(PreviewControlReports.Int(a,"attributeIndex",0,4096))},null),
                 "paste_attribute"=>StartBackend(job,"paste_efx",PasteBody(a),PreviewControlReports.Long(a,"expectedRevision")),
                 "curve_key"=>StartBackend(job,"curve_key",CurveBody(a),PreviewControlReports.Long(a,"expectedRevision")),
-                "add_entry" or "duplicate_entry" or "remove_entry" or "copy_entry" or "paste_entry"=>StartEntryAction(job),
+                "add_entry" or "duplicate_entry" or "remove_entry" or "copy_entry" or "paste_entry"
+                    or "add_action" or "duplicate_action" or "remove_action" or "copy_action" or "paste_action"=>StartEntryAction(job),
                 "save_copy"=>Task.Run(()=>editor.CommandAsync("save",PreviewControlReports.String(a,"path"))),
                 "open"=>StartOpen(a),
                 _=>throw new InvalidOperationException("内部错误：未知的编辑操作。")
@@ -943,14 +1065,14 @@ void ContinueControl(PreviewControlRequest job)
                 var result=PreviewControlReports.Inspection(job.BackendReply!,inspectedAttribute);
                 result["document"]=PreviewControlReports.Document(state);
                 // The window's property panel and curve timeline follow what the AI looks at (never over a draft).
-                if(state.Manifest is {} m) result["windowFocused"]=editPanel.Focus(new PreviewGraphPick(m.EntryPosition,inspectedAttribute));
+                if(state.EditTarget is {} t) result["windowFocused"]=editPanel.Focus(new PreviewGraphPick(t,inspectedAttribute));
                 job.Succeed(result);
             }
             else if(job.Action=="save_copy") job.Succeed(new JsonObject{["savedPath"]=state.SavedPath,["document"]=PreviewControlReports.Document(state)});
             else if(job.Action=="attribute_types")
                 job.Succeed(new JsonObject{["types"]=job.BackendReply?["document"]?["attributeTypes"]?.DeepClone()??new JsonArray(),
                     ["catalog"]=PreviewControlReports.Catalog(state),["document"]=PreviewControlReports.Document(state)});
-            else if(job.Action is "copy_attribute" or "copy_entry")
+            else if(job.Action is "copy_attribute" or "copy_entry" or "copy_action")
                 job.Succeed(new JsonObject{["copyBuffer"]=job.BackendReply?["copyBuffer"]?.DeepClone(),["document"]=PreviewControlReports.Document(state)});
             else job.Phase=4;
             return;
@@ -1120,9 +1242,9 @@ void DrawEntrySelector()
     {
         foreach(var e in scene.Entries)
         {
-            // The editor targets the Types the preview draws; excluded ones stay selectable for fixing.
-            bool selectable=scene.Graph.EmitterAt(e.Position)?.Previewable==true;
-            if(ImGui.Selectable(Label(e),e.Position==current?.Position,selectable?ImGuiSelectableFlags.None:ImGuiSelectableFlags.Disabled) && selectable && e.Position!=current?.Position && editorState!=null)
+            // Every entry can be edited; ones the preview does not draw are listed with the reason in the tooltip.
+            bool selectable=scene.Graph.EmitterAt(e.Position)?.Editable==true;
+            if(ImGui.Selectable(Label(e),e.Position==current?.Position,selectable?ImGuiSelectableFlags.None:ImGuiSelectableFlags.Disabled) && selectable && (e.Position!=current?.Position || editorState?.Target!=null) && editorState!=null)
                 StartEditorCommand(new PreviewEditCommand("select_entry",editorState.Revision,EntryPosition:e.Position));
             if(e.Excluded!=null && ImGui.IsItemHovered()) ImGui.SetTooltip(e.Excluded);
             else if(e.Missing.Count>0 && ImGui.IsItemHovered()) ImGui.SetTooltip("找不到这些资源，用黄白格子占位贴图代替：\n"+string.Join("\n",e.Missing));
@@ -1163,7 +1285,8 @@ void DrawEntrySelector()
         if(ImGui.IsItemHovered()) ImGui.SetTooltip("面板可拖到窗口四边停靠，拖动标题栏离开即可浮动；这里恢复默认停靠布局。");
     }
     ImGui.TextDisabled("把 .efx 文件拖进窗口即可打开");
-    if(current?.Excluded is {} reason) ImGui.TextColored(new Vector4(1,.75f,.35f,1),"所选 entry 未显示："+reason);
+    // Editing does not depend on drawing: a selected entry the preview cannot draw is still edited normally.
+    if(current?.Excluded is {} reason) ImGui.TextDisabled("所选 entry 不绘制（"+reason.TrimEnd('。')+"），属性照常编辑。");
     var placeholders=scene.Entries.Concat(scene.Children).Where(e=>e.Shown && e.Missing.Count>0).ToArray();
     if(placeholders.Length>0)
     {
@@ -1247,16 +1370,16 @@ window.Update += dt =>
             // AI edits ("ai:*") never discard the panel's draft; mutations are refused while one exists.
             // Structural edits shift attribute indices, so the panel starts over on the new list.
             // Structural edits (and their undo/redo) shift attribute indices: the panel starts over on the new list.
-            string attributeList=$"{editorState.Manifest?.DocumentId}:{editorState.Manifest?.EntryPosition}:{string.Join(",",editorState.Attributes?.Select(a=>a.Type)??[])}";
+            string attributeList=$"{editorState.Manifest?.DocumentId}:{editorState.EditTarget?.Key}:{string.Join(",",editorState.Attributes?.Select(a=>a.Type)??[])}";
             if(editAction is "ai:add_attribute" or "ai:remove_attribute" or "ai:paste_attribute" ||
                 attributeList!=lastAttributeList && !editPanel.HasUnappliedChanges &&
-                editAction is not ("select_entry" or "open" or "open_source" or "open_saved" or "ai:open" or "ai:select_entry" or "inspect")) editPanel=new PreviewEditPanel();
+                editAction is not ("select_entry" or "select_target" or "open" or "open_source" or "open_saved" or "ai:open" or "ai:select_entry" or "inspect")) editPanel=new PreviewEditPanel(LoadMaterial);
             lastAttributeList=attributeList;
             // An attribute added or pasted from the window opens in the property panel.
-            if(editAction=="structure" && editorState.Manifest is {} edited)
+            if(editAction=="structure" && editorState.EditTarget is {} edited)
             {
                 int open=focusAttributeIndex>=0?focusAttributeIndex:editorState.Attributes?.FirstOrDefault(a=>a.Type==focusAttributeType)?.Index??-1;
-                if(open>=0) editPanel.Focus(new PreviewGraphPick(edited.EntryPosition,open));
+                if(open>=0) editPanel.Focus(new PreviewGraphPick(edited,open));
             }
             focusAttributeType=null;focusAttributeIndex=-1;
             editPanel.Reset(editorState,discardDraft:editAction is "fields" or "billboard" or "life" or "open" or "open_source" or "open_saved" or "ai:open" or "curve_key");
@@ -1651,7 +1774,7 @@ window.Render += _ =>
     string? graphLock=editTask!=null?"编辑器忙，稍候再选":editPanel.HasUnappliedChanges?"先应用或放弃属性草稿，再从节点图选择":stress!=0?"压力模式下不能编辑":null;
     var manifest=editorState?.Manifest;
     var inspected=editorState?.Inspection;
-    if(inspected!=null && (manifest==null || inspected.DocumentId!=manifest.DocumentId || inspected.EntryPosition!=manifest.EntryPosition ||
+    if(inspected!=null && (manifest==null || inspected.DocumentId!=manifest.DocumentId || !inspected.EditTarget.Equals(editorState!.EditTarget) ||
         inspected.AttributeIndex!=editPanel.SelectedAttribute || inspected.Revision!=editorState!.Revision)) inspected=null;
     string? curveAttributeType=editorState?.Attributes?.FirstOrDefault(a=>a.Index==editPanel.SelectedAttribute)?.Type;
     if(curvePanel.Draw(inspected,curveAttributeType,playback.DisplayedTick,graphLock) is {} curveBody && editorState!=null)
@@ -1661,14 +1784,18 @@ window.Render += _ =>
     }
     if(graphPanel!=null) {graphPanel.ClipboardKind=copyBuffer?["kind"]?.GetValue<string>();graphPanel.ClipboardName=copyBuffer?["attributeType"]?.GetValue<string>()??copyBuffer?["name"]?.GetValue<string>();}
     if(graphPanel?.Draw(scene?.Graph,manifest?.DocumentId,manifest==null?null:Path.GetFileName(manifest.Source),manifest?.EntryPosition,
-        editPanel.SelectedAttribute,graphLock) is {} pick && editorState!=null && editPanel.Focus(pick) && pick.EntryPosition!=manifest?.EntryPosition)
-        StartEditorCommand(new PreviewEditCommand("select_entry",editorState.Revision,EntryPosition:pick.EntryPosition));
+        editorState?.EditTarget,editPanel.SelectedAttribute,graphLock) is {} pick && editorState!=null && editPanel.Focus(pick) && !pick.Target.Equals(editorState.EditTarget))
+        StartEditorCommand(pick.Target.IsRoot ? new PreviewEditCommand("select_entry",editorState.Revision,EntryPosition:pick.Target.Index)
+            : new PreviewEditCommand("select_target",editorState.Revision,Tag:pick.Target));
     if(graphPanel?.Dropped is {} dropOnGraph) RequestAdd(dropOnGraph);
     if(graphPanel?.Requested is {} fromGraph) RequestStructure(fromGraph);
     var catalogTypes=manifest==null?null:editorState?.Attributes?.Select(a=>a.Type).ToArray();
     string? addLock=editTask!=null?"编辑器忙，稍候再添加":editPanel.HasUnappliedChanges?"先应用或放弃属性草稿，再添加属性":stress!=0?"压力模式下不能编辑":null;
     mcpPanel.Draw(control,activeControl,options.ContainsKey("no-ai-control")?"以 --no-ai-control 启动。":"自动测量模式不开启 AI 控制通道。");
-    if(catalogPanel.Draw(manifest?.EntryPosition,manifest==null?null:scene?.Entries.FirstOrDefault(e=>e.Position==manifest.EntryPosition)?.Name,
+    var editTarget=manifest==null?null:editorState?.EditTarget;
+    string? editName=editTarget==null?null:editTarget.IsRoot?scene?.Entries.FirstOrDefault(e=>e.Position==editTarget.Index)?.Name
+        :scene?.Graph.Nodes.FirstOrDefault(n=>editTarget.Equals(n.Target))?.Title;
+    if(catalogPanel.Draw(editTarget,editName,
         catalogTypes?.FirstOrDefault(PreviewAttributeCatalog.IsTypeAttribute),catalogTypes,addLock) is {} doubleClicked)
         RequestAdd(doubleClicked);
     gl.Viewport(0,0,(uint)Math.Max(1,window.FramebufferSize.X),(uint)Math.Max(1,window.FramebufferSize.Y));   // the scene left it at the central node

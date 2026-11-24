@@ -27,19 +27,15 @@ internal sealed partial class EditorEngine
             if (candidates.Length != 1) throw new ArgumentException("无法唯一定位所选发射器，请指定 entryPosition。");
             position = candidates[0].index;
         }
-        if (position < 0 || position >= file.Entries.Count || !Previewable(file.Entries[position]))
-            throw new NotSupportedException("请选择一个 Billboard3D、Polygon、Billboard2D、RibbonFollow、RibbonLength、RibbonFixEnd、PolygonTrail、Mesh 或 NoDraw 发射器。");
+        if (position < 0 || position >= file.Entries.Count) throw new ArgumentOutOfRangeException(nameof(request), "entry 位置超出范围。");
         offlinePreviewEntry = position;
         offlinePreviewEntryId = file.Entries[position].index;
         offlinePreviewDocument = documentSessionKey;
         offlinePreviewRevision = -1;
     }
 
-    /// <summary>Type attributes the offline preview draws.</summary>
-    private static bool Previewable(EFXEntry entry) =>
-        // NoDraw draws nothing itself, but its particles fire child Actions the preview runs; it can be the edited entry.
-        entry.TypeAttribute is EFXAttributeTypeNoDraw or EFXAttributeTypeBillboard3D or EFXAttributeTypePolygon or EFXAttributeTypeBillboard2D or EFXAttributeTypeRibbonFollow or EFXAttributeTypeRibbonLength
-            or EFXAttributeTypePolygonTrail or EFXAttributeTypeMeshV2 || entry.TypeAttribute is EFXAttributeTypeRibbonFixEnd { ShapeDivision: >= 2 };
+    // Every top-level entry can be the edited one. Editing does not depend on drawing: the window draws the entries
+    // its renderer supports and lists the others as not drawn, but their attributes stay editable.
 
     private void AttachOfflinePreview(JsonObject response, bool force)
     {
@@ -59,10 +55,9 @@ internal sealed partial class EditorEngine
                 var moved=entries.Select((entry,index)=>(entry,index)).Where(x=>x.entry.index==offlinePreviewEntryId).ToArray();
                 if(moved.Length>1) throw new InvalidOperationException("预览目标已变化，请重新选择发射器。");
                 // The target itself is gone (for example undoing the paste or duplicate that created it):
-                // continue with the previewable entry nearest to where it was.
-                int fallback=moved.Length==1?moved[0].index:entries.Select((entry,index)=>(entry,index)).Where(x=>Previewable(x.entry))
-                    .OrderBy(x=>Math.Abs(x.index-offlinePreviewEntry.Value)).Select(x=>x.index).DefaultIfEmpty(-1).First();
-                if(fallback<0) throw new InvalidOperationException("预览目标已删除，文件里没有其他可预览的发射器。");
+                // continue with the entry nearest to where it was.
+                int fallback=moved.Length==1?moved[0].index:entries.Count==0?-1:Math.Clamp(offlinePreviewEntry.Value,0,entries.Count-1);
+                if(fallback<0) throw new InvalidOperationException("编辑目标已删除，文件里没有其他 entry。");
                 offlinePreviewEntry=fallback;
                 offlinePreviewEntryId=entries[fallback].index;
                 offlinePreviewRevision=-1;
@@ -90,8 +85,7 @@ internal sealed partial class EditorEngine
             {
                 var file = Require();
                 int position = offlinePreviewEntry.Value;
-                if (position >= file.Entries.Count || !Previewable(file.Entries[position]))
-                    throw new InvalidOperationException("所选发射器已变化，请重新选择预览目标。");
+                if (position >= file.Entries.Count) throw new InvalidOperationException("所选 entry 已变化，请重新选择。");
                 // Immutable revision files. Publish the manifest only after full EFX readback succeeds.
                 byte[] content = Validate(file, source!);
                 using var reopened = service.Load(content, source!);
