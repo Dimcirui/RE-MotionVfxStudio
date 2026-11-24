@@ -70,6 +70,7 @@ var editPanel = new PreviewEditPanel();
 PreviewGraphPanel? graphPanel = null;
 var curvePanel = new PreviewCurvePanel();
 var catalogPanel = new PreviewCatalogPanel();
+var mcpPanel = new PreviewMcpPanel();
 // After a structural edit from the window: the attribute to open (by type, or the index the backend reports).
 string? focusAttributeType = null; int focusAttributeIndex = -1;
 string? lastAttributeList = null;
@@ -78,6 +79,7 @@ string? openConfirmation = null;         // opened at the top level: popup ids d
 string? structureNote = null;        // a remark on the last structural edit (for example: new entry not previewable)
 PreviewStructureRequest? confirmRemoveEntry = null, confirmPaste = null, chooseScript = null;
 bool dockCatalog = false;            // a saved layout from before the catalogue existed: dock it once next to the main panel
+bool dockMcp = false;                // the same for the MCP status panel
 // A file dropped on the window: waiting (pendingOpen), or waiting for the user to discard unsaved edits (dropConfirm).
 string? pendingOpen = null, dropConfirm = null;
 bool dropDiscardAccepted = false;
@@ -1153,9 +1155,11 @@ void DrawEntrySelector()
     if(graphPanel!=null) {ImGui.SameLine();ImGui.Checkbox("节点图",ref graphPanel.Visible);}
     ImGui.SameLine();ImGui.Checkbox("曲线时间轴",ref curvePanel.Visible);
     ImGui.SameLine();ImGui.Checkbox("属性目录",ref catalogPanel.Visible);
+    ImGui.Checkbox(PreviewMcpPanel.Title,ref mcpPanel.Visible);
     if(docking)
     {
-        if(ImGui.SmallButton("重置布局")) {resetLayout=true;curvePanel.Visible=true;catalogPanel.Visible=true;if(graphPanel!=null) graphPanel.Visible=true;}
+        ImGui.SameLine();
+        if(ImGui.SmallButton("重置布局")) {resetLayout=true;curvePanel.Visible=true;catalogPanel.Visible=true;mcpPanel.Visible=true;if(graphPanel!=null) graphPanel.Visible=true;}
         if(ImGui.IsItemHovered()) ImGui.SetTooltip("面板可拖到窗口四边停靠，拖动标题栏离开即可浮动；这里恢复默认停靠布局。");
     }
     ImGui.TextDisabled("把 .efx 文件拖进窗口即可打开");
@@ -1198,7 +1202,9 @@ window.Load += () =>
         io.ConfigFlags |= ImGuiConfigFlags.DockingEnable;
         Directory.CreateDirectory(Path.GetDirectoryName(layoutFile)!);
         resetLayout=!File.Exists(layoutFile);
-        dockCatalog=!resetLayout && !File.ReadAllText(layoutFile).Contains("[Window][属性目录]");
+        string savedLayout=resetLayout?"":File.ReadAllText(layoutFile);
+        dockCatalog=!resetLayout && !savedLayout.Contains("[Window][属性目录]");
+        dockMcp=!resetLayout && !savedLayout.Contains("[Window]["+PreviewMcpPanel.Title+"]");
         // ImGui keeps the pointer: allocated once for the window's lifetime.
         layoutFileName=System.Runtime.InteropServices.Marshal.StringToCoTaskMemUTF8(layoutFile);
         io.IniFilename=(byte*)layoutFileName;
@@ -1416,13 +1422,14 @@ unsafe void UpdateDockspace()
         ImGuiP.DockBuilderSplitNode(bottom,ImGuiDir.Left,.22f,&catalog,&rest);
         ImGuiP.DockBuilderSplitNode(rest,ImGuiDir.Right,.45f,&property,&graph);
         ImGuiP.DockBuilderDockWindow("RE4 原生预览 · P2",left);
+        ImGuiP.DockBuilderDockWindow(PreviewMcpPanel.Title,left);
         ImGuiP.DockBuilderDockWindow("属性目录",catalog);
         ImGuiP.DockBuilderDockWindow("EFX 属性编辑",property);
         ImGuiP.DockBuilderDockWindow("EFX 节点图",graph);
         ImGuiP.DockBuilderDockWindow("曲线时间轴",graph);
         ImGuiP.DockBuilderFinish(dockspace);
         selectGraphTab=10;
-        dockCatalog=false;
+        dockCatalog=false;dockMcp=false;
     }
     else if(dockCatalog && ImGuiP.FindWindowByName("RE4 原生预览 · P2") is {IsNull:false} main && main.DockId!=0)
     {
@@ -1430,14 +1437,24 @@ unsafe void UpdateDockspace()
         ImGuiP.DockBuilderDockWindow("属性目录",main.DockId);
         dockCatalog=false;
     }
+    if(dockMcp && ImGuiP.FindWindowByName("RE4 原生预览 · P2") is {IsNull:false} mainPanel && mainPanel.DockId!=0)
+    {
+        ImGuiP.DockBuilderDockWindow(PreviewMcpPanel.Title,mainPanel.DockId);
+        dockMcp=false;
+    }
     // After a reset the node graph, not the curve timeline, is the tab in front. Selecting it while building is
     // overridden when the panels first appear, so ask the tab bar once both exist.
     if(selectGraphTab>0)
     {
         selectGraphTab--;
         var graphWindow=ImGuiP.FindWindowByName("EFX 节点图");
-        if(!graphWindow.IsNull && !graphWindow.DockNode.IsNull && !graphWindow.DockNode.TabBar.IsNull)
-        {graphWindow.DockNode.TabBar.NextSelectedTabId=graphWindow.TabId;selectGraphTab=0;}
+        var mainWindow=ImGuiP.FindWindowByName("RE4 原生预览 · P2");
+        bool graphFront=!graphWindow.IsNull && !graphWindow.DockNode.IsNull && !graphWindow.DockNode.TabBar.IsNull;
+        bool mainFront=!mainWindow.IsNull && !mainWindow.DockNode.IsNull && !mainWindow.DockNode.TabBar.IsNull;
+        // The main panel, not the MCP status behind it, is in front as well.
+        if(graphFront) graphWindow.DockNode.TabBar.NextSelectedTabId=graphWindow.TabId;
+        if(mainFront) mainWindow.DockNode.TabBar.NextSelectedTabId=mainWindow.TabId;
+        if(graphFront && mainFront) selectGraphTab=0;
     }
     ImGui.DockSpaceOverViewport(dockspace,viewport,ImGuiDockNodeFlags.PassthruCentralNode);
     // The scene fills the central node (what docked panels leave free), in framebuffer pixels.
@@ -1650,6 +1667,7 @@ window.Render += _ =>
     if(graphPanel?.Requested is {} fromGraph) RequestStructure(fromGraph);
     var catalogTypes=manifest==null?null:editorState?.Attributes?.Select(a=>a.Type).ToArray();
     string? addLock=editTask!=null?"编辑器忙，稍候再添加":editPanel.HasUnappliedChanges?"先应用或放弃属性草稿，再添加属性":stress!=0?"压力模式下不能编辑":null;
+    mcpPanel.Draw(control,activeControl,options.ContainsKey("no-ai-control")?"以 --no-ai-control 启动。":"自动测量模式不开启 AI 控制通道。");
     if(catalogPanel.Draw(manifest?.EntryPosition,manifest==null?null:scene?.Entries.FirstOrDefault(e=>e.Position==manifest.EntryPosition)?.Name,
         catalogTypes?.FirstOrDefault(PreviewAttributeCatalog.IsTypeAttribute),catalogTypes,addLock) is {} doubleClicked)
         RequestAdd(doubleClicked);

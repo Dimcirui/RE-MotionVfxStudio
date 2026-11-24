@@ -26,6 +26,9 @@ internal sealed class PreviewPipeBridge(string pipeName, string? repository, Tim
             throw new BridgeException("preview_not_running", "No RE4 preview window answers on pipe " + pipeName +
                 ". Call re4preview_launch, or start VfxStudio.Re4Preview yourself. A window that is busy with another AI request also refuses new connections; retry after it finishes.");
         }
+        // Nothing was sent, so the outcome is certain.
+        catch (UnauthorizedAccessException error)
+        { throw new BridgeException("preview_access_denied", PipeAccessDiagnosis.Explain(pipeName, error.Message)); }
         var request = new JsonObject { ["protocol"] = 1, ["id"] = requestId, ["action"] = action, ["arguments"] = arguments.DeepClone() };
         await pipe.WriteAsync(new UTF8Encoding(false).GetBytes(request.ToJsonString() + "\n"), cancellationToken);
         await pipe.FlushAsync(cancellationToken);
